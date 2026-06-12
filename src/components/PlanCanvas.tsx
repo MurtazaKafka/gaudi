@@ -1,13 +1,40 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Circle, Label, Layer, Line, Stage, Tag, Text } from 'react-konva';
+import { Circle, Group, Label, Layer, Line, Path, Rect, Stage, Tag, Text } from 'react-konva';
 import type Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
-import { usePlanStore, type EndpointRef } from '../store';
+import {
+  clampOffset,
+  DEFAULT_OPENING_WIDTH,
+  openingFits,
+  usePlanStore,
+  type EndpointRef,
+} from '../store';
 import { useUiStore } from '../uiStore';
-import { dist, formatMeters, midpoint, ptEq, snapPoint, type SnapResult } from '../geometry';
+import {
+  dist,
+  formatMeters,
+  midpoint,
+  nearestWallPoint,
+  ptEq,
+  snapPoint,
+  wallAngle,
+  type SnapResult,
+} from '../geometry';
 import { detectRooms, type DetectedRoom } from '../rooms';
-import type { Point, Wall } from '../types';
+import type { Opening, OpeningType, Point, Wall } from '../types';
 import { theme } from '../theme';
+
+interface OpeningGhost {
+  wallId: string;
+  offset: number;
+  valid: boolean;
+}
+
+declare global {
+  interface Window {
+    __view?: View;
+  }
+}
 
 interface View {
   /** px per meter */ scale: number;
@@ -24,6 +51,20 @@ function isTypingTarget(el: EventTarget | null): boolean {
   return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable;
 }
 
+/** Where a door/window would land for a pointer position; reads the store directly. */
+function computeGhost(raw: Point, type: OpeningType, scale: number): OpeningGhost | null {
+  const { walls, openings } = usePlanStore.getState();
+  const hit = nearestWallPoint(raw, walls);
+  const threshold = Math.max(0.3, 16 / scale);
+  if (!hit || hit.dist >= threshold) return null;
+  const wall = walls.find((w) => w.id === hit.wallId)!;
+  const width = DEFAULT_OPENING_WIDTH[type];
+  const offset = clampOffset(wall, hit.offset, width);
+  const valid =
+    dist(wall.a, wall.b) > width + 0.15 && openingFits(openings, wall, offset, width);
+  return { wallId: hit.wallId, offset, valid };
+}
+
 export function PlanCanvas() {
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<Konva.Stage>(null);
@@ -32,9 +73,12 @@ export function PlanCanvas() {
   const viewInitialized = useRef(false);
 
   const walls = usePlanStore((s) => s.walls);
+  const openings = usePlanStore((s) => s.openings);
   const settings = usePlanStore((s) => s.settings);
   const tool = useUiStore((s) => s.tool);
   const selectedWallIds = useUiStore((s) => s.selectedWallIds);
+  const selectedOpeningIds = useUiStore((s) => s.selectedOpeningIds);
+  const [ghost, setGhost] = useState<OpeningGhost | null>(null);
 
   // Drawing state: the pending polyline anchor and the live (snapped) cursor.
   // The anchor lives in a ref (updated synchronously, so rapid clicks in one
@@ -98,12 +142,19 @@ export function PlanCanvas() {
           setAnchor(null);
           ui.setTool('wall');
           break;
+        case 'd':
+        case 'D':
+          ui.setTool('door');
+          break;
+        case 'n':
+        case 'N':
+          ui.setTool('window');
+          break;
         case 'Delete':
         case 'Backspace':
-          if (ui.selectedWallIds.length) {
-            plan.deleteWalls(ui.selectedWallIds);
-            ui.setSelection([]);
-          }
+          if (ui.selectedWallIds.length) plan.deleteWalls(ui.selectedWallIds);
+          if (ui.selectedOpeningIds.length) plan.deleteOpenings(ui.selectedOpeningIds);
+          if (ui.selectedWallIds.length || ui.selectedOpeningIds.length) ui.setSelection([]);
           break;
       }
     };
@@ -149,10 +200,18 @@ export function PlanCanvas() {
     }
 
     const raw = toWorld(pos.x, pos.y);
+    const ui = useUiStore.getState();
+
+    if (tool === 'door' || tool === 'window') {
+      setGhost(computeGhost(raw, tool, view.scale));
+      setSnap(null);
+      ui.setCursor(raw);
+      ui.setDrawingLength(null);
+      return;
+    }
+
     const result = snapPoint(raw, walls, settings.gridSize, snapRadiusM);
     setSnap(result);
-
-    const ui = useUiStore.getState();
     ui.setCursor(result.p);
     ui.setDrawingLength(anchorRef.current ? dist(anchorRef.current, result.p) : null);
   };
@@ -183,6 +242,16 @@ export function PlanCanvas() {
       } else if (!ptEq(a, p)) {
         plan.addWall(a, p);
         setAnchor(p);
+      }
+      return;
+    }
+
+    if (tool === 'door' || tool === 'window') {
+      // Recompute from the pointer (not the rendered ghost) so a click in the
+      // same frame as a mouse move can't place against stale state.
+      const g = computeGhost(toWorld(pos.x, pos.y), tool, view.scale);
+      if (g?.valid) {
+        usePlanStore.getState().addOpening(g.wallId, tool, g.offset, DEFAULT_OPENING_WIDTH[tool]);
       }
       return;
     }
@@ -220,6 +289,7 @@ export function PlanCanvas() {
 
   const handleMouseLeave = () => {
     setSnap(null);
+    setGhost(null);
     const ui = useUiStore.getState();
     ui.setCursor(null);
     ui.setDrawingLength(null);
@@ -235,7 +305,7 @@ export function PlanCanvas() {
     ? 'grabbing'
     : spaceDown
       ? 'grab'
-      : tool === 'wall'
+      : tool !== 'select'
         ? 'crosshair'
         : 'default';
 
@@ -246,6 +316,9 @@ export function PlanCanvas() {
 
   const rooms = useMemo(() => detectRooms(walls), [walls]);
   const [editingRoomKey, setEditingRoomKey] = useState<string | null>(null);
+
+  // Test/debug hook: lets tooling map world coords → screen exactly.
+  if (import.meta.env.DEV) window.__view = view;
 
   const px = (n: number) => n / view.scale; // px → m at current zoom
 
@@ -302,6 +375,45 @@ export function PlanCanvas() {
               onHover={(h) => setHoverWallId(h ? w.id : null)}
             />
           ))}
+
+          {openings.map((o) => {
+            const wall = walls.find((w) => w.id === o.wallId);
+            if (!wall) return null;
+            return (
+              <OpeningShape
+                key={o.id}
+                wall={wall}
+                opening={o}
+                thickness={settings.wallThickness}
+                scale={view.scale}
+                selected={selectedOpeningIds.includes(o.id)}
+                interactive={tool === 'select'}
+              />
+            );
+          })}
+
+          {/* placement ghost */}
+          {(tool === 'door' || tool === 'window') && ghost?.valid && (() => {
+            const wall = walls.find((w) => w.id === ghost.wallId);
+            if (!wall) return null;
+            return (
+              <OpeningShape
+                wall={wall}
+                opening={{
+                  id: '__ghost',
+                  wallId: ghost.wallId,
+                  type: tool,
+                  offset: ghost.offset,
+                  width: DEFAULT_OPENING_WIDTH[tool],
+                }}
+                thickness={settings.wallThickness}
+                scale={view.scale}
+                selected={false}
+                interactive={false}
+                ghost
+              />
+            );
+          })()}
 
           {tool === 'select' &&
             selectedWallIds.map((id) => {
@@ -377,6 +489,62 @@ export function PlanCanvas() {
           onEndEdit={() => setEditingRoomKey(null)}
         />
       ))}
+
+      {tool === 'select' && selectedOpeningIds.length === 1 && (() => {
+        const o = openings.find((x) => x.id === selectedOpeningIds[0]);
+        const wall = o && walls.find((w) => w.id === o.wallId);
+        if (!o || !wall) return null;
+        return <OpeningInspector opening={o} wall={wall} view={view} />;
+      })()}
+    </div>
+  );
+}
+
+function OpeningInspector({
+  opening,
+  wall,
+  view,
+}: {
+  opening: Opening;
+  wall: Wall;
+  view: View;
+}) {
+  const updateOpeningWidth = usePlanStore((s) => s.updateOpeningWidth);
+  const deleteOpenings = usePlanStore((s) => s.deleteOpenings);
+  const setOpeningSelection = useUiStore((s) => s.setOpeningSelection);
+
+  const len = dist(wall.a, wall.b);
+  const t = opening.offset / len;
+  const cx = wall.a.x + (wall.b.x - wall.a.x) * t;
+  const cy = wall.a.y + (wall.b.y - wall.a.y) * t;
+  const sx = cx * view.scale + view.tx;
+  const sy = cy * view.scale + view.ty;
+
+  return (
+    <div className="opening-inspector" style={{ left: sx, top: sy - 34 }}>
+      <span className="oi-type">{opening.type}</span>
+      <input
+        type="number"
+        value={opening.width}
+        min={0.4}
+        max={Math.max(0.4, len - 0.1)}
+        step={0.1}
+        onChange={(e) => {
+          const v = parseFloat(e.target.value);
+          if (!Number.isNaN(v)) updateOpeningWidth(opening.id, v);
+        }}
+      />
+      <span className="oi-unit">m</span>
+      <button
+        className="oi-delete"
+        title="Delete opening"
+        onClick={() => {
+          deleteOpenings([opening.id]);
+          setOpeningSelection([]);
+        }}
+      >
+        ✕
+      </button>
     </div>
   );
 }
@@ -495,6 +663,116 @@ function SelectedWallOverlay({
       <EndpointHandle wall={wall} end="a" scale={scale} snapRadiusM={snapRadiusM} />
       <EndpointHandle wall={wall} end="b" scale={scale} snapRadiusM={snapRadiusM} />
     </>
+  );
+}
+
+/** Plan symbol for a door (swing arc) or window (glazing lines), drawn in the wall's local frame. */
+function OpeningShape({
+  wall,
+  opening,
+  thickness,
+  scale,
+  selected,
+  interactive,
+  ghost = false,
+}: {
+  wall: Wall;
+  opening: Opening;
+  thickness: number;
+  scale: number;
+  selected: boolean;
+  interactive: boolean;
+  ghost?: boolean;
+}) {
+  const len = dist(wall.a, wall.b);
+  if (len < 1e-6) return null;
+  const t = opening.offset / len;
+  const cx = wall.a.x + (wall.b.x - wall.a.x) * t;
+  const cy = wall.a.y + (wall.b.y - wall.a.y) * t;
+  const deg = (wallAngle(wall) * 180) / Math.PI;
+
+  const w = opening.width;
+  const half = w / 2;
+  const ht = thickness / 2;
+  const thin = 1.2 / scale;
+  const ink = ghost ? theme.accent : selected ? theme.accent : theme.ink;
+  const soft = ghost ? theme.accent : selected ? theme.accent : theme.inkSoft;
+
+  return (
+    <Group x={cx} y={cy} rotation={deg} opacity={ghost ? 0.55 : 1} listening={interactive}>
+      {/* the gap: paint over the wall stroke */}
+      <Rect
+        x={-half}
+        y={-ht - 0.5 / scale}
+        width={w}
+        height={thickness + 1 / scale}
+        fill={theme.paper}
+        listening={false}
+      />
+      {/* jambs */}
+      <Line points={[-half, -ht, -half, ht]} stroke={ink} strokeWidth={thin} listening={false} />
+      <Line points={[half, -ht, half, ht]} stroke={ink} strokeWidth={thin} listening={false} />
+
+      {opening.type === 'door' ? (
+        <>
+          {/* leaf + quarter-circle swing */}
+          <Line
+            points={[-half, -ht, -half, -ht - w]}
+            stroke={soft}
+            strokeWidth={thin}
+            listening={false}
+          />
+          <Path
+            data={`M ${-half} ${-ht - w} A ${w} ${w} 0 0 1 ${half} ${-ht}`}
+            stroke={soft}
+            strokeWidth={thin}
+            listening={false}
+          />
+        </>
+      ) : (
+        <>
+          {/* glazing lines */}
+          <Line
+            points={[-half, -thickness / 6, half, -thickness / 6]}
+            stroke={ink}
+            strokeWidth={thin}
+            listening={false}
+          />
+          <Line
+            points={[-half, thickness / 6, half, thickness / 6]}
+            stroke={ink}
+            strokeWidth={thin}
+            listening={false}
+          />
+        </>
+      )}
+
+      {/* hit + selection area */}
+      <Rect
+        x={-half}
+        y={-ht - 6 / scale}
+        width={w}
+        height={thickness + 12 / scale}
+        fill="transparent"
+        onClick={(e) => {
+          if (e.evt.button !== 0) return;
+          e.cancelBubble = true;
+          useUiStore.getState().setOpeningSelection([opening.id]);
+        }}
+      />
+      {selected && (
+        <Rect
+          x={-half - 2 / scale}
+          y={-ht - 4 / scale}
+          width={w + 4 / scale}
+          height={thickness + 8 / scale}
+          stroke={theme.accent}
+          strokeWidth={1 / scale}
+          dash={[3 / scale, 2 / scale]}
+          listening={false}
+        />
+      )}
+    </Group>
   );
 }
 

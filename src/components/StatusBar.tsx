@@ -6,7 +6,9 @@ import { detectRooms } from '../rooms';
 
 const hints: Record<string, string> = {
   wall: 'click to place · enter / esc finishes the run · scroll pans · ⌘ scroll zooms',
-  select: 'click a wall to select · drag endpoints to adjust · ⌫ deletes · shift-click adds',
+  select: 'click a wall or opening to select · drag endpoints to adjust · ⌫ deletes',
+  door: 'hover a wall · click to place a door · esc for select',
+  window: 'hover a wall · click to place a window · esc for select',
 };
 
 export function StatusBar() {

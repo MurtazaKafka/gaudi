@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
-import { OrbitControls } from '@react-three/drei';
+import { Edges, OrbitControls } from '@react-three/drei';
 import { usePlanStore } from '../store';
 import { buildWallBoxes } from '../build';
 import { detectRooms } from '../rooms';
@@ -40,9 +40,9 @@ export function Scene3D() {
   }, [walls]);
 
   const camPos: [number, number, number] = [
-    center.x + radius * 1.5,
-    radius * 1.7,
-    center.y + radius * 1.9,
+    center.x + radius * 1.4,
+    radius * 2.3,
+    center.y + radius * 1.8,
   ];
   const target: [number, number, number] = [center.x, 0, center.y];
 
@@ -51,10 +51,12 @@ export function Scene3D() {
       <Canvas shadows camera={{ position: camPos, fov: 42 }}>
         <color attach="background" args={[theme.paper]} />
 
-        <ambientLight intensity={0.85} />
+        {/* warm key light + cool sky fill: maquette under a studio lamp */}
+        <hemisphereLight args={['#fdf9ef', '#cfc8b8', 0.9]} />
         <directionalLight
           position={[center.x + radius * 1.2, radius * 2.6, center.y - radius * 1.4]}
-          intensity={2.2}
+          intensity={1.9}
+          color="#fff4e0"
           castShadow
           shadow-mapSize={[2048, 2048]}
           shadow-camera-left={-radius * 2.2}
@@ -63,6 +65,10 @@ export function Scene3D() {
           shadow-camera-bottom={-radius * 2.2}
           shadow-camera-far={radius * 8}
           shadow-bias={-0.0004}
+        />
+        <directionalLight
+          position={[center.x - radius * 1.6, radius * 1.2, center.y + radius * 1.8]}
+          intensity={0.35}
         />
 
         {boxes.map((b) => (
@@ -75,6 +81,7 @@ export function Scene3D() {
           >
             <boxGeometry args={[b.length, b.height, b.thickness]} />
             <meshStandardMaterial color={WALL_COLOR} roughness={0.92} />
+            <Edges linewidth={1} threshold={20} color="#b6ae9e" />
           </mesh>
         ))}
 

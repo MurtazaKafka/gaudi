@@ -1,6 +1,38 @@
 import { create } from 'zustand';
-import type { Opening, PlanSettings, Point, Wall } from './types';
+import type { Opening, OpeningType, PlanSettings, Point, Wall } from './types';
 import { dist, ptEq } from './geometry';
+
+export const DEFAULT_OPENING_WIDTH: Record<OpeningType, number> = {
+  door: 0.9,
+  window: 1.2,
+};
+
+/** Margin kept between openings and wall ends / each other. */
+const OPENING_GAP = 0.05;
+
+export function openingFits(
+  openings: Opening[],
+  wall: Wall,
+  offset: number,
+  width: number,
+  ignoreId?: string,
+): boolean {
+  const len = dist(wall.a, wall.b);
+  if (offset - width / 2 < -1e-9 || offset + width / 2 > len + 1e-9) return false;
+  return openings.every(
+    (o) =>
+      o.wallId !== wall.id ||
+      o.id === ignoreId ||
+      Math.abs(o.offset - offset) >= (o.width + width) / 2 + OPENING_GAP,
+  );
+}
+
+/** Clamp an opening's center so it sits fully on the wall. */
+export function clampOffset(wall: Wall, offset: number, width: number): number {
+  const len = dist(wall.a, wall.b);
+  const half = width / 2 + OPENING_GAP;
+  return Math.min(Math.max(offset, half), Math.max(half, len - half));
+}
 
 export interface EndpointRef {
   wallId: string;
@@ -19,6 +51,10 @@ interface PlanState {
   moveEndpoints: (refs: EndpointRef[], to: Point) => void;
   /** Drop zero-length walls and exact duplicates (after drags). Returns removed ids. */
   cleanupWalls: () => string[];
+  /** Place an opening centered at `offset` (m from endpoint A). No-op if it doesn't fit. */
+  addOpening: (wallId: string, type: OpeningType, offset: number, width: number) => void;
+  deleteOpenings: (ids: string[]) => void;
+  updateOpeningWidth: (id: string, width: number) => void;
   setRoomName: (key: string, name: string) => void;
   updateSettings: (patch: Partial<PlanSettings>) => void;
 }
@@ -73,13 +109,50 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       if (degenerate || dup) removed.push(w.id);
       else kept.push(w);
     }
-    if (removed.length) {
-      set((s) => ({
-        walls: kept,
-        openings: s.openings.filter((o) => !removed.includes(o.wallId)),
-      }));
+
+    // Re-fit openings: walls may have shrunk under them.
+    const openings: Opening[] = [];
+    for (const o of get().openings) {
+      if (removed.includes(o.wallId)) continue;
+      const wall = kept.find((w) => w.id === o.wallId);
+      if (!wall) continue;
+      if (dist(wall.a, wall.b) < o.width + 2 * OPENING_GAP) continue;
+      const offset = clampOffset(wall, o.offset, o.width);
+      openings.push(offset === o.offset ? o : { ...o, offset });
     }
+
+    set({ walls: kept, openings });
     return removed;
+  },
+
+  addOpening: (wallId, type, offset, width) => {
+    const { walls, openings } = get();
+    const wall = walls.find((w) => w.id === wallId);
+    if (!wall) return;
+    const clamped = clampOffset(wall, offset, width);
+    if (!openingFits(openings, wall, clamped, width)) return;
+    set((s) => ({
+      openings: [
+        ...s.openings,
+        { id: crypto.randomUUID(), wallId, type, offset: clamped, width },
+      ],
+    }));
+  },
+
+  deleteOpenings: (ids) =>
+    set((s) => ({ openings: s.openings.filter((o) => !ids.includes(o.id)) })),
+
+  updateOpeningWidth: (id, width) => {
+    const { walls, openings } = get();
+    const opening = openings.find((o) => o.id === id);
+    const wall = opening && walls.find((w) => w.id === opening.wallId);
+    if (!opening || !wall) return;
+    const w = Math.min(Math.max(width, 0.4), dist(wall.a, wall.b) - 2 * OPENING_GAP);
+    const offset = clampOffset(wall, opening.offset, w);
+    if (!openingFits(openings, wall, offset, w, id)) return;
+    set((s) => ({
+      openings: s.openings.map((o) => (o.id === id ? { ...o, width: w, offset } : o)),
+    }));
   },
 
   setRoomName: (key, name) =>

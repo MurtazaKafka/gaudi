@@ -28,6 +28,29 @@ const tools: { id: Tool; label: string; hint: string; icon: React.ReactNode }[] 
       </svg>
     ),
   },
+  {
+    id: 'door',
+    label: 'Door',
+    hint: 'D',
+    icon: (
+      <svg width="17" height="17" viewBox="0 0 16 16" fill="none">
+        <path d="M2 13h12" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M4 13V4" stroke="currentColor" strokeWidth="1.4" />
+        <path d="M4 4a9 9 0 0 1 9 9" stroke="currentColor" strokeWidth="1.1" strokeDasharray="2 1.6" />
+      </svg>
+    ),
+  },
+  {
+    id: 'window',
+    label: 'Window',
+    hint: 'N',
+    icon: (
+      <svg width="17" height="17" viewBox="0 0 16 16" fill="none">
+        <rect x="2" y="5.5" width="12" height="5" stroke="currentColor" strokeWidth="1.4" />
+        <path d="M2 8h12" stroke="currentColor" strokeWidth="1.1" />
+      </svg>
+    ),
+  },
 ];
 
 export function Toolbar() {

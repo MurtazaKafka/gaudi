@@ -51,6 +51,30 @@ export function snapPoint(
   return { p: snapToGrid(raw, grid), kind: 'grid' };
 }
 
+export interface WallHit {
+  wallId: string;
+  /** distance from wall endpoint A along the wall, m */
+  offset: number;
+  /** perpendicular distance from the query point, m */
+  dist: number;
+}
+
+/** Nearest point on any wall segment (for placing openings). */
+export function nearestWallPoint(p: Point, walls: Wall[]): WallHit | null {
+  let best: WallHit | null = null;
+  for (const w of walls) {
+    const len = dist(w.a, w.b);
+    if (len < EPS) continue;
+    const dx = (w.b.x - w.a.x) / len;
+    const dy = (w.b.y - w.a.y) / len;
+    const t = Math.min(len, Math.max(0, (p.x - w.a.x) * dx + (p.y - w.a.y) * dy));
+    const proj = { x: w.a.x + dx * t, y: w.a.y + dy * t };
+    const d = dist(p, proj);
+    if (!best || d < best.dist) best = { wallId: w.id, offset: t, dist: d };
+  }
+  return best;
+}
+
 export function midpoint(a: Point, b: Point): Point {
   return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
 }
