@@ -5,7 +5,8 @@ import { Edges, OrbitControls } from '@react-three/drei';
 import { usePlanStore } from '../store';
 import { buildWallBoxes } from '../build';
 import { detectRooms } from '../rooms';
-import type { Point } from '../types';
+import { furnitureDef, type Part } from '../catalog';
+import type { Furniture, Point } from '../types';
 import { theme } from '../theme';
 
 const WALL_COLOR = '#efebe1';
@@ -15,6 +16,7 @@ const GROUND_COLOR = '#eae6dc';
 export function Scene3D() {
   const walls = usePlanStore((s) => s.walls);
   const openings = usePlanStore((s) => s.openings);
+  const furniture = usePlanStore((s) => s.furniture);
   const settings = usePlanStore((s) => s.settings);
 
   const boxes = useMemo(
@@ -89,6 +91,10 @@ export function Scene3D() {
           <Floor key={room.key} polygon={room.polygon} />
         ))}
 
+        {furniture.map((f) => (
+          <FurnitureItem key={f.id} item={f} />
+        ))}
+
         {/* ground */}
         <mesh rotation={[-Math.PI / 2, 0, 0]} position={[center.x, -0.002, center.y]} receiveShadow>
           <circleGeometry args={[Math.max(radius * 5, 24), 64]} />
@@ -104,6 +110,32 @@ export function Scene3D() {
         />
       </Canvas>
     </div>
+  );
+}
+
+function FurnitureItem({ item }: { item: Furniture }) {
+  const def = furnitureDef(item.kind);
+  return (
+    <group position={[item.x, 0, item.y]} rotation={[0, -item.rotation, 0]}>
+      {def.parts.map((p, i) => (
+        <PartMesh key={i} part={p} />
+      ))}
+    </group>
+  );
+}
+
+function PartMesh({ part }: { part: Part }) {
+  return (
+    <mesh position={[part.x, part.y, part.z]} castShadow receiveShadow>
+      {part.shape === 'box' ? (
+        <boxGeometry args={[part.w!, part.h!, part.d!]} />
+      ) : part.shape === 'cylinder' ? (
+        <cylinderGeometry args={[part.r!, part.r!, part.h!, 24]} />
+      ) : (
+        <sphereGeometry args={[part.r!, 18, 14]} />
+      )}
+      <meshStandardMaterial color={part.color} roughness={0.9} />
+    </mesh>
   );
 }
 

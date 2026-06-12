@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { buildWallBoxes } from './build';
 import { detectRooms } from './rooms';
+import { furnitureDef } from './catalog';
 import { usePlanStore } from './store';
 import { downloadBlob } from './serialize';
 
@@ -10,7 +11,7 @@ import { downloadBlob } from './serialize';
  * and download it as a binary glTF.
  */
 export async function exportGlb(): Promise<void> {
-  const { walls, openings, roomNames, settings } = usePlanStore.getState();
+  const { walls, openings, furniture, roomNames, settings } = usePlanStore.getState();
   const scene = new THREE.Scene();
   scene.name = 'gaudi-house';
 
@@ -38,6 +39,36 @@ export async function exportGlb(): Promise<void> {
     mesh.position.y = 0.005;
     mesh.name = `floor-${roomNames[room.key] ?? 'room'}`;
     scene.add(mesh);
+  }
+
+  const materials = new Map<string, THREE.MeshStandardMaterial>();
+  const materialFor = (color: string) => {
+    let m = materials.get(color);
+    if (!m) {
+      m = new THREE.MeshStandardMaterial({ color, roughness: 0.9 });
+      materials.set(color, m);
+    }
+    return m;
+  };
+
+  for (const f of furniture) {
+    const def = furnitureDef(f.kind);
+    const group = new THREE.Group();
+    group.position.set(f.x, 0, f.y);
+    group.rotation.y = -f.rotation;
+    group.name = f.kind;
+    for (const p of def.parts) {
+      const geo =
+        p.shape === 'box'
+          ? new THREE.BoxGeometry(p.w!, p.h!, p.d!)
+          : p.shape === 'cylinder'
+            ? new THREE.CylinderGeometry(p.r!, p.r!, p.h!, 24)
+            : new THREE.SphereGeometry(p.r!, 18, 14);
+      const mesh = new THREE.Mesh(geo, materialFor(p.color));
+      mesh.position.set(p.x, p.y, p.z);
+      group.add(mesh);
+    }
+    scene.add(group);
   }
 
   const exporter = new GLTFExporter();

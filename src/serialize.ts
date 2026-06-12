@@ -1,18 +1,28 @@
 import { defaultSettings, usePlanStore } from './store';
-import type { Opening, PlanSettings, Point, Wall } from './types';
+import { FURNITURE } from './catalog';
+import type { Furniture, Opening, PlanSettings, Point, Wall } from './types';
 
 interface PlanFile {
   app: 'gaudi';
   version: 1;
   walls: Wall[];
   openings: Opening[];
+  furniture?: Furniture[];
   roomNames: Record<string, string>;
   settings: PlanSettings;
 }
 
 export function exportPlanJSON(): string {
-  const { walls, openings, roomNames, settings } = usePlanStore.getState();
-  const file: PlanFile = { app: 'gaudi', version: 1, walls, openings, roomNames, settings };
+  const { walls, openings, furniture, roomNames, settings } = usePlanStore.getState();
+  const file: PlanFile = {
+    app: 'gaudi',
+    version: 1,
+    walls,
+    openings,
+    furniture,
+    roomNames,
+    settings,
+  };
   return JSON.stringify(file, null, 2);
 }
 
@@ -75,6 +85,24 @@ export function importPlanJSON(text: string): { ok: true } | { ok: false; error:
     });
   }
 
+  const furniture: Furniture[] = [];
+  for (const fu of Array.isArray(f.furniture) ? f.furniture : []) {
+    if (
+      !(fu?.kind in FURNITURE) ||
+      !Number.isFinite(fu.x) ||
+      !Number.isFinite(fu.y) ||
+      !Number.isFinite(fu.rotation)
+    )
+      continue;
+    furniture.push({
+      id: typeof fu.id === 'string' ? fu.id : crypto.randomUUID(),
+      kind: fu.kind,
+      x: fu.x,
+      y: fu.y,
+      rotation: fu.rotation,
+    });
+  }
+
   const s = f.settings;
   const settings: PlanSettings = {
     wallHeight: Number.isFinite(s?.wallHeight) ? s!.wallHeight : defaultSettings.wallHeight,
@@ -91,6 +119,6 @@ export function importPlanJSON(text: string): { ok: true } | { ok: false; error:
     }
   }
 
-  usePlanStore.setState({ walls, openings, roomNames, settings });
+  usePlanStore.setState({ walls, openings, furniture, roomNames, settings });
   return { ok: true };
 }
