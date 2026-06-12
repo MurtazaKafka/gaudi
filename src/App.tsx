@@ -3,6 +3,7 @@ import { TopBar } from './components/TopBar';
 import { Toolbar } from './components/Toolbar';
 import { StatusBar } from './components/StatusBar';
 import { PlanCanvas } from './components/PlanCanvas';
+import { FurniturePalette } from './components/FurniturePalette';
 import { useUiStore } from './uiStore';
 
 // three.js only loads when the user first builds the model.
@@ -12,6 +13,7 @@ const Scene3D = lazy(() =>
 
 export default function App() {
   const mode = useUiStore((s) => s.mode);
+  const paletteOpen = useUiStore((s) => s.paletteOpen);
 
   // Esc in the model view returns to the plan.
   useEffect(() => {
@@ -29,6 +31,7 @@ export default function App() {
       <TopBar />
       <div className="app-body">
         {mode === 'plan' && <Toolbar />}
+        {mode === 'plan' && paletteOpen && <FurniturePalette />}
         <main className="canvas-wrap">
           {/* The plan canvas stays mounted so the editor view survives toggling. */}
           <div className="view-plan" style={{ display: mode === 'plan' ? undefined : 'none' }}>

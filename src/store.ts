@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Opening, OpeningType, PlanSettings, Point, Wall } from './types';
+import type { Furniture, Opening, OpeningType, PlanSettings, Point, Wall } from './types';
+import type { FurnitureKind } from './catalog';
 import { dist, ptEq } from './geometry';
 
 export const DEFAULT_OPENING_WIDTH: Record<OpeningType, number> = {
@@ -28,6 +29,10 @@ export function openingFits(
   );
 }
 
+function round3(v: number): number {
+  return Math.round(v * 1000) / 1000;
+}
+
 /** Clamp an opening's center so it sits fully on the wall. */
 export function clampOffset(wall: Wall, offset: number, width: number): number {
   const len = dist(wall.a, wall.b);
@@ -43,6 +48,7 @@ export interface EndpointRef {
 interface PlanState {
   walls: Wall[];
   openings: Opening[];
+  furniture: Furniture[];
   roomNames: Record<string, string>;
   settings: PlanSettings;
 
@@ -56,6 +62,12 @@ interface PlanState {
   addOpening: (wallId: string, type: OpeningType, offset: number, width: number) => void;
   deleteOpenings: (ids: string[]) => void;
   updateOpeningWidth: (id: string, width: number) => void;
+  addFurniture: (kind: FurnitureKind, x: number, y: number, rotation: number) => string;
+  /** Add several at once (AI suggestions land as one batch). */
+  addFurnitureBatch: (items: Omit<Furniture, 'id'>[]) => void;
+  moveFurniture: (id: string, x: number, y: number) => void;
+  rotateFurniture: (id: string, delta: number) => void;
+  deleteFurniture: (ids: string[]) => void;
   setRoomName: (key: string, name: string) => void;
   updateSettings: (patch: Partial<PlanSettings>) => void;
 }
@@ -71,6 +83,7 @@ export const usePlanStore = create<PlanState>()(
     (set, get) => ({
       walls: [],
       openings: [],
+      furniture: [],
       roomNames: {},
       settings: { ...defaultSettings },
 
@@ -158,6 +171,39 @@ export const usePlanStore = create<PlanState>()(
     }));
   },
 
+  addFurniture: (kind, x, y, rotation) => {
+    const id = crypto.randomUUID();
+    set((s) => ({
+      furniture: [...s.furniture, { id, kind, x: round3(x), y: round3(y), rotation }],
+    }));
+    return id;
+  },
+
+  addFurnitureBatch: (items) =>
+    set((s) => ({
+      furniture: [
+        ...s.furniture,
+        ...items.map((f) => ({ ...f, id: crypto.randomUUID() })),
+      ],
+    })),
+
+  moveFurniture: (id, x, y) =>
+    set((s) => ({
+      furniture: s.furniture.map((f) =>
+        f.id === id ? { ...f, x: round3(x), y: round3(y) } : f,
+      ),
+    })),
+
+  rotateFurniture: (id, delta) =>
+    set((s) => ({
+      furniture: s.furniture.map((f) =>
+        f.id === id ? { ...f, rotation: f.rotation + delta } : f,
+      ),
+    })),
+
+  deleteFurniture: (ids) =>
+    set((s) => ({ furniture: s.furniture.filter((f) => !ids.includes(f.id)) })),
+
   setRoomName: (key, name) =>
     set((s) => {
       const roomNames = { ...s.roomNames };
@@ -174,6 +220,7 @@ export const usePlanStore = create<PlanState>()(
       partialize: (s) => ({
         walls: s.walls,
         openings: s.openings,
+        furniture: s.furniture,
         roomNames: s.roomNames,
         settings: s.settings,
       }),

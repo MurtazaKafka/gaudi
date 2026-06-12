@@ -9,6 +9,7 @@ const hints: Record<string, string> = {
   select: 'click a wall or opening to select · drag endpoints to adjust · ⌫ deletes',
   door: 'hover a wall · click to place a door · esc for select',
   window: 'hover a wall · click to place a window · esc for select',
+  furniture: 'click to place · R rotates · pick items in the palette · esc for select',
 };
 
 export function StatusBar() {

@@ -56,6 +56,8 @@ const tools: { id: Tool; label: string; hint: string; icon: React.ReactNode }[] 
 export function Toolbar() {
   const tool = useUiStore((s) => s.tool);
   const setTool = useUiStore((s) => s.setTool);
+  const paletteOpen = useUiStore((s) => s.paletteOpen);
+  const setPaletteOpen = useUiStore((s) => s.setPaletteOpen);
 
   return (
     <nav className="toolbar">
@@ -70,6 +72,23 @@ export function Toolbar() {
           <span className="tool-hint">{t.hint}</span>
         </button>
       ))}
+      <span className="toolbar-rule" />
+      <button
+        className={`tool-btn ${tool === 'furniture' || paletteOpen ? 'active' : ''}`}
+        title="Furniture — F"
+        onClick={() => setPaletteOpen(!paletteOpen)}
+      >
+        <svg width="17" height="17" viewBox="0 0 16 16" fill="none">
+          <path
+            d="M2.5 7v5m11-5v5M2.5 10h11M4 10V8.2A1.7 1.7 0 0 1 5.7 6.5h4.6A1.7 1.7 0 0 1 12 8.2V10"
+            stroke="currentColor"
+            strokeWidth="1.4"
+            strokeLinecap="round"
+          />
+          <path d="M4 7V4.5A1.5 1.5 0 0 1 5.5 3h5A1.5 1.5 0 0 1 12 4.5V7" stroke="currentColor" strokeWidth="1.4" />
+        </svg>
+        <span className="tool-hint">F</span>
+      </button>
     </nav>
   );
 }

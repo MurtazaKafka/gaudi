@@ -297,6 +297,81 @@ body {
   opacity: 0.55;
 }
 
+.toolbar-rule {
+  width: 24px;
+  height: 1px;
+  background: var(--line);
+  margin: 4px 0;
+}
+
+/* ---------- furniture palette ---------- */
+
+.palette {
+  width: 172px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+  padding: 12px 10px 20px;
+}
+
+.palette-head {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink);
+  padding: 2px 6px 10px;
+}
+
+.palette-group {
+  margin-bottom: 12px;
+}
+
+.palette-group-title {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  padding: 0 6px 4px;
+}
+
+.palette-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  width: 100%;
+  padding: 5px 6px;
+  font-family: var(--sans);
+  font-size: 12px;
+  color: var(--ink);
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.palette-item:hover {
+  background: var(--paper);
+}
+
+.palette-item.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.palette-item-dims {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--ink-soft);
+}
+
+.palette-item.active .palette-item-dims {
+  color: var(--accent);
+}
+
 .canvas-wrap {
   flex: 1;
   min-width: 0;

@@ -21,8 +21,11 @@ import {
   type SnapResult,
 } from '../geometry';
 import { detectRooms, type DetectedRoom } from '../rooms';
+import { FurnitureShape } from './FurnitureShape';
 import type { Opening, OpeningType, Point, Wall } from '../types';
 import { theme } from '../theme';
+
+const FURNITURE_SNAP = 0.1;
 
 interface OpeningGhost {
   wallId: string;
@@ -74,11 +77,16 @@ export function PlanCanvas() {
 
   const walls = usePlanStore((s) => s.walls);
   const openings = usePlanStore((s) => s.openings);
+  const furniture = usePlanStore((s) => s.furniture);
   const settings = usePlanStore((s) => s.settings);
   const tool = useUiStore((s) => s.tool);
   const selectedWallIds = useUiStore((s) => s.selectedWallIds);
   const selectedOpeningIds = useUiStore((s) => s.selectedOpeningIds);
+  const selectedFurnitureIds = useUiStore((s) => s.selectedFurnitureIds);
+  const placingKind = useUiStore((s) => s.placingKind);
   const [ghost, setGhost] = useState<OpeningGhost | null>(null);
+  const [placeRotation, setPlaceRotation] = useState(0);
+  const placeRotationRef = useRef(0);
 
   // Drawing state: the pending polyline anchor and the live (snapped) cursor.
   // The anchor lives in a ref (updated synchronously, so rapid clicks in one
@@ -150,11 +158,27 @@ export function PlanCanvas() {
         case 'N':
           ui.setTool('window');
           break;
+        case 'f':
+        case 'F':
+          ui.setPaletteOpen(!ui.paletteOpen);
+          break;
+        case 'r':
+        case 'R': {
+          const delta = e.shiftKey ? -Math.PI / 2 : Math.PI / 2;
+          if (ui.tool === 'furniture') {
+            placeRotationRef.current += delta;
+            setPlaceRotation(placeRotationRef.current);
+          } else if (ui.selectedFurnitureIds.length) {
+            for (const id of ui.selectedFurnitureIds) plan.rotateFurniture(id, delta);
+          }
+          break;
+        }
         case 'Delete':
         case 'Backspace':
           if (ui.selectedWallIds.length) plan.deleteWalls(ui.selectedWallIds);
           if (ui.selectedOpeningIds.length) plan.deleteOpenings(ui.selectedOpeningIds);
-          if (ui.selectedWallIds.length || ui.selectedOpeningIds.length) ui.setSelection([]);
+          if (ui.selectedFurnitureIds.length) plan.deleteFurniture(ui.selectedFurnitureIds);
+          ui.setSelection([]);
           break;
       }
     };
@@ -210,6 +234,17 @@ export function PlanCanvas() {
       return;
     }
 
+    if (tool === 'furniture') {
+      const snapped = {
+        x: Math.round(raw.x / FURNITURE_SNAP) * FURNITURE_SNAP,
+        y: Math.round(raw.y / FURNITURE_SNAP) * FURNITURE_SNAP,
+      };
+      setSnap({ p: snapped, kind: 'grid' });
+      ui.setCursor(snapped);
+      ui.setDrawingLength(null);
+      return;
+    }
+
     const result = snapPoint(raw, walls, settings.gridSize, snapRadiusM);
     setSnap(result);
     ui.setCursor(result.p);
@@ -252,6 +287,22 @@ export function PlanCanvas() {
       const g = computeGhost(toWorld(pos.x, pos.y), tool, view.scale);
       if (g?.valid) {
         usePlanStore.getState().addOpening(g.wallId, tool, g.offset, DEFAULT_OPENING_WIDTH[tool]);
+      }
+      return;
+    }
+
+    if (tool === 'furniture') {
+      const kind = useUiStore.getState().placingKind;
+      if (kind) {
+        const raw = toWorld(pos.x, pos.y);
+        usePlanStore
+          .getState()
+          .addFurniture(
+            kind,
+            Math.round(raw.x / FURNITURE_SNAP) * FURNITURE_SNAP,
+            Math.round(raw.y / FURNITURE_SNAP) * FURNITURE_SNAP,
+            placeRotationRef.current,
+          );
       }
       return;
     }
@@ -318,7 +369,9 @@ export function PlanCanvas() {
   const [editingRoomKey, setEditingRoomKey] = useState<string | null>(null);
 
   // Test/debug hook: lets tooling map world coords → screen exactly.
-  if (import.meta.env.DEV) window.__view = view;
+  useEffect(() => {
+    if (import.meta.env.DEV) window.__view = view;
+  }, [view]);
 
   const px = (n: number) => n / view.scale; // px → m at current zoom
 
@@ -362,6 +415,33 @@ export function PlanCanvas() {
               onDblClick={() => setEditingRoomKey(room.key)}
             />
           ))}
+
+          {furniture.map((f) => (
+            <FurnitureShape
+              key={f.id}
+              item={f}
+              scale={view.scale}
+              selected={selectedFurnitureIds.includes(f.id)}
+              interactive={tool === 'select'}
+            />
+          ))}
+
+          {/* furniture placement ghost */}
+          {tool === 'furniture' && placingKind && snap && (
+            <FurnitureShape
+              item={{
+                id: '__ghost',
+                kind: placingKind,
+                x: snap.p.x,
+                y: snap.p.y,
+                rotation: placeRotation,
+              }}
+              scale={view.scale}
+              selected={false}
+              interactive={false}
+              ghost
+            />
+          )}
 
           {walls.map((w) => (
             <WallLine

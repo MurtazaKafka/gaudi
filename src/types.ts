@@ -21,10 +21,21 @@ export interface Opening {
   width: number;
 }
 
+import type { FurnitureKind } from './catalog';
+
+/** A placed furniture item: center position in plan meters, rotation in radians. */
+export interface Furniture {
+  id: string;
+  kind: FurnitureKind;
+  x: number;
+  y: number;
+  rotation: number;
+}
+
 export interface PlanSettings {
   /** m */ wallHeight: number;
   /** m */ wallThickness: number;
   /** m */ gridSize: number;
 }
 
-export type Tool = 'select' | 'wall' | 'door' | 'window';
+export type Tool = 'select' | 'wall' | 'door' | 'window' | 'furniture';
