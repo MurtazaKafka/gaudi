@@ -164,6 +164,41 @@ body {
   color: var(--ink-soft);
 }
 
+.file-actions {
+  display: flex;
+  gap: 2px;
+}
+
+.file-actions button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  color: var(--ink-soft);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color 100ms ease, background 100ms ease;
+}
+
+.file-actions button:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--paper);
+}
+
+.file-actions button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.topbar-rule {
+  width: 1px;
+  height: 18px;
+  background: var(--line);
+}
+
 .build-btn {
   font-family: var(--sans);
   font-size: 12px;
@@ -282,6 +317,17 @@ body {
 .scene-3d {
   position: absolute;
   inset: 0;
+}
+
+.scene-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-soft);
 }
 
 /* ---------- room labels ---------- */

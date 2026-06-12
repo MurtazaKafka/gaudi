@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import type { Opening, OpeningType, PlanSettings, Point, Wall } from './types';
 import { dist, ptEq } from './geometry';
 
@@ -65,11 +66,13 @@ export const defaultSettings: PlanSettings = {
   gridSize: 0.5,
 };
 
-export const usePlanStore = create<PlanState>((set, get) => ({
-  walls: [],
-  openings: [],
-  roomNames: {},
-  settings: { ...defaultSettings },
+export const usePlanStore = create<PlanState>()(
+  persist(
+    (set, get) => ({
+      walls: [],
+      openings: [],
+      roomNames: {},
+      settings: { ...defaultSettings },
 
   addWall: (a, b) => {
     if (ptEq(a, b)) return;
@@ -165,7 +168,18 @@ export const usePlanStore = create<PlanState>((set, get) => ({
 
   updateSettings: (patch) =>
     set((s) => ({ settings: { ...s.settings, ...patch } })),
-}));
+    }),
+    {
+      name: 'gaudi-plan-v1',
+      partialize: (s) => ({
+        walls: s.walls,
+        openings: s.openings,
+        roomNames: s.roomNames,
+        settings: s.settings,
+      }),
+    },
+  ),
+);
 
 declare global {
   interface Window {

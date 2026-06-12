@@ -1,10 +1,14 @@
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { TopBar } from './components/TopBar';
 import { Toolbar } from './components/Toolbar';
 import { StatusBar } from './components/StatusBar';
 import { PlanCanvas } from './components/PlanCanvas';
-import { Scene3D } from './components/Scene3D';
 import { useUiStore } from './uiStore';
+
+// three.js only loads when the user first builds the model.
+const Scene3D = lazy(() =>
+  import('./components/Scene3D').then((m) => ({ default: m.Scene3D })),
+);
 
 export default function App() {
   const mode = useUiStore((s) => s.mode);
@@ -30,7 +34,11 @@ export default function App() {
           <div className="view-plan" style={{ display: mode === 'plan' ? undefined : 'none' }}>
             <PlanCanvas />
           </div>
-          {mode === 'model' && <Scene3D />}
+          {mode === 'model' && (
+            <Suspense fallback={<div className="scene-loading">building…</div>}>
+              <Scene3D />
+            </Suspense>
+          )}
         </main>
       </div>
       <StatusBar />
