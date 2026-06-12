@@ -524,6 +524,120 @@ body {
   background: var(--accent-soft);
 }
 
+/* ---------- room AI panel ---------- */
+
+.room-ai-panel {
+  position: absolute;
+  transform: translate(-50%, 0);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 218px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  box-shadow: 0 3px 16px rgba(33, 31, 27, 0.12);
+}
+
+.rap-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+
+.rap-title.rap-error {
+  color: var(--accent);
+}
+
+.rap-loading::after {
+  content: '';
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-left: 7px;
+  border: 1.5px solid var(--accent);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: rap-spin 0.7s linear infinite;
+}
+
+@keyframes rap-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.rap-hint {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--ink-soft);
+}
+
+.room-ai-panel input {
+  width: 100%;
+  padding: 6px 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  outline: none;
+}
+
+.room-ai-panel input:focus {
+  border-color: var(--accent);
+}
+
+.rap-row {
+  display: flex;
+  gap: 6px;
+}
+
+.rap-primary {
+  flex: 1;
+  padding: 7px 10px;
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--surface);
+  background: var(--accent);
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.rap-primary:hover:not(:disabled) {
+  background: #a8412a;
+}
+
+.rap-primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.rap-ghost {
+  padding: 7px 10px;
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--ink-soft);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.rap-ghost:hover {
+  color: var(--ink);
+  background: var(--paper);
+}
+
 /* ---------- status bar ---------- */
 
 .statusbar {

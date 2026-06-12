@@ -11,6 +11,7 @@ interface UiState {
   selectedWallIds: string[];
   selectedOpeningIds: string[];
   selectedFurnitureIds: string[];
+  selectedRoomKey: string | null;
   /** Which catalog item the furniture tool is placing. */
   placingKind: FurnitureKind | null;
   /** Whether the furniture palette panel is open. */
@@ -26,6 +27,7 @@ interface UiState {
   toggleSelected: (id: string) => void;
   setOpeningSelection: (ids: string[]) => void;
   setFurnitureSelection: (ids: string[]) => void;
+  setRoomSelection: (key: string | null) => void;
   startPlacing: (kind: FurnitureKind) => void;
   setPaletteOpen: (open: boolean) => void;
   setCursor: (p: Point | null) => void;
@@ -38,6 +40,7 @@ export const useUiStore = create<UiState>((set) => ({
   selectedWallIds: [],
   selectedOpeningIds: [],
   selectedFurnitureIds: [],
+  selectedRoomKey: null,
   placingKind: null,
   paletteOpen: false,
   cursor: null,
@@ -50,10 +53,16 @@ export const useUiStore = create<UiState>((set) => ({
       selectedWallIds: [],
       selectedOpeningIds: [],
       selectedFurnitureIds: [],
+      selectedRoomKey: null,
       placingKind: tool === 'furniture' ? s.placingKind : null,
     })),
   setSelection: (ids) =>
-    set({ selectedWallIds: ids, selectedOpeningIds: [], selectedFurnitureIds: [] }),
+    set({
+      selectedWallIds: ids,
+      selectedOpeningIds: [],
+      selectedFurnitureIds: [],
+      selectedRoomKey: null,
+    }),
   toggleSelected: (id) =>
     set((s) => ({
       selectedWallIds: s.selectedWallIds.includes(id)
@@ -61,9 +70,26 @@ export const useUiStore = create<UiState>((set) => ({
         : [...s.selectedWallIds, id],
     })),
   setOpeningSelection: (ids) =>
-    set({ selectedOpeningIds: ids, selectedWallIds: [], selectedFurnitureIds: [] }),
+    set({
+      selectedOpeningIds: ids,
+      selectedWallIds: [],
+      selectedFurnitureIds: [],
+      selectedRoomKey: null,
+    }),
   setFurnitureSelection: (ids) =>
-    set({ selectedFurnitureIds: ids, selectedWallIds: [], selectedOpeningIds: [] }),
+    set({
+      selectedFurnitureIds: ids,
+      selectedWallIds: [],
+      selectedOpeningIds: [],
+      selectedRoomKey: null,
+    }),
+  setRoomSelection: (key) =>
+    set({
+      selectedRoomKey: key,
+      selectedWallIds: [],
+      selectedOpeningIds: [],
+      selectedFurnitureIds: [],
+    }),
   startPlacing: (kind) =>
     set({
       tool: 'furniture',
@@ -71,6 +97,7 @@ export const useUiStore = create<UiState>((set) => ({
       selectedWallIds: [],
       selectedOpeningIds: [],
       selectedFurnitureIds: [],
+      selectedRoomKey: null,
     }),
   setPaletteOpen: (open) => set({ paletteOpen: open }),
   setCursor: (p) => set({ cursor: p }),

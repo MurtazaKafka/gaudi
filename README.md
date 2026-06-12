@@ -21,6 +21,8 @@ npm run dev
 | Select / adjust | `V`, click a wall; drag endpoints; `⌫` deletes |
 | Doors / windows | `D` / `N`, hover a wall, click to place; select one to edit width |
 | Name a room | select tool, double-click the room label |
+| Place furniture | `F` opens the palette, click an item, click to place, `R` rotates |
+| Furnish with AI | select tool, click a room, "Furnish with AI" |
 | Build the model | the Build button (or the Plan / Model toggle) |
 | Navigate 3D | drag orbits · scroll zooms · shift-drag pans · `Esc` back to plan |
 | Pan / zoom 2D | scroll pans · `⌘`-scroll or pinch zooms · space-drag pans |
@@ -32,6 +34,15 @@ the wall into pieces — side segments, lintel, sill — no boolean geometry any
 The plan persists to localStorage. The tray icons in the top bar import/export
 the plan as JSON and export the model as `.glb`.
 
+## AI furnishing
+
+Click a room with the select tool and hit **Furnish with AI**: Claude
+(`claude-opus-4-8`, called directly from the browser with your own Anthropic
+API key — stored only in localStorage) sees the room's polygon, name, doors,
+windows, and existing furniture, and proposes a layout from the parametric
+catalog as structured JSON. Suggestions appear as ghosts; geometry validation
+drops anything outside the room or overlapping before you accept.
+
 ## Deploy
 
 Static Vite build, no backend:
@@ -41,7 +52,7 @@ npm run build        # outputs dist/
 vercel               # or any static host
 ```
 
-## Out of scope for v1
+## Still out of scope
 
-AI features (natural-language editing, furniture suggestions), multi-floor and
-stairs, curved walls, furniture, accounts. Phase 2 candidates.
+Natural-language plan editing, style transfer, multi-floor and stairs, curved
+walls, accounts. Later-phase candidates.

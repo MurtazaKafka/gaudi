@@ -22,6 +22,8 @@ import {
 } from '../geometry';
 import { detectRooms, type DetectedRoom } from '../rooms';
 import { FurnitureShape } from './FurnitureShape';
+import { RoomAiPanel } from './RoomAiPanel';
+import { useAiStore } from '../aiStore';
 import type { Opening, OpeningType, Point, Wall } from '../types';
 import { theme } from '../theme';
 
@@ -83,7 +85,11 @@ export function PlanCanvas() {
   const selectedWallIds = useUiStore((s) => s.selectedWallIds);
   const selectedOpeningIds = useUiStore((s) => s.selectedOpeningIds);
   const selectedFurnitureIds = useUiStore((s) => s.selectedFurnitureIds);
+  const selectedRoomKey = useUiStore((s) => s.selectedRoomKey);
   const placingKind = useUiStore((s) => s.placingKind);
+  const aiStatus = useAiStore((s) => s.status);
+  const aiRoomKey = useAiStore((s) => s.roomKey);
+  const aiItems = useAiStore((s) => s.items);
   const [ghost, setGhost] = useState<OpeningGhost | null>(null);
   const [placeRotation, setPlaceRotation] = useState(0);
   const placeRotationRef = useRef(0);
@@ -410,8 +416,13 @@ export function PlanCanvas() {
               key={room.key}
               points={room.polygon.flatMap((p) => [p.x, p.y])}
               closed
-              fill={theme.roomFill}
+              fill={selectedRoomKey === room.key ? theme.accentSoft : theme.roomFill}
               listening={tool === 'select'}
+              onClick={(e) => {
+                if (e.evt.button !== 0) return;
+                e.cancelBubble = true;
+                useUiStore.getState().setRoomSelection(room.key);
+              }}
               onDblClick={() => setEditingRoomKey(room.key)}
             />
           ))}
@@ -425,6 +436,19 @@ export function PlanCanvas() {
               interactive={tool === 'select'}
             />
           ))}
+
+          {/* AI suggestion preview ghosts */}
+          {aiStatus === 'preview' &&
+            aiItems.map((f, i) => (
+              <FurnitureShape
+                key={`ai-${i}`}
+                item={{ ...f, id: `__ai-${i}` }}
+                scale={view.scale}
+                selected={false}
+                interactive={false}
+                ghost
+              />
+            ))}
 
           {/* furniture placement ghost */}
           {tool === 'furniture' && placingKind && snap && (
@@ -575,6 +599,20 @@ export function PlanCanvas() {
         const wall = o && walls.find((w) => w.id === o.wallId);
         if (!o || !wall) return null;
         return <OpeningInspector opening={o} wall={wall} view={view} />;
+      })()}
+
+      {tool === 'select' && (() => {
+        // Keep the panel up for the active AI room even if selection moved.
+        const key = selectedRoomKey ?? (aiStatus !== 'idle' ? aiRoomKey : null);
+        const room = key ? rooms.find((r) => r.key === key) : null;
+        if (!room) return null;
+        return (
+          <RoomAiPanel
+            room={room}
+            screenX={room.centroid.x * view.scale + view.tx}
+            screenY={room.centroid.y * view.scale + view.ty + 36}
+          />
+        );
       })()}
     </div>
   );

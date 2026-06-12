@@ -75,6 +75,67 @@ export function nearestWallPoint(p: Point, walls: Wall[]): WallHit | null {
   return best;
 }
 
+/** Ray-casting point-in-polygon test. */
+export function pointInPolygon(p: Point, poly: Point[]): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i];
+    const b = poly[j];
+    if (
+      a.y > p.y !== b.y > p.y &&
+      p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x
+    ) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+export function distToSegment(p: Point, a: Point, b: Point): number {
+  const len = dist(a, b);
+  if (len < EPS) return dist(p, a);
+  const t = Math.min(1, Math.max(0, ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / (len * len)));
+  return dist(p, { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+}
+
+/** Corners of a w×d rectangle centered at (cx,cy), rotated by `rot` radians. */
+export function rectCorners(cx: number, cy: number, w: number, d: number, rot: number): Point[] {
+  const c = Math.cos(rot);
+  const s = Math.sin(rot);
+  const hw = w / 2;
+  const hd = d / 2;
+  return [
+    { x: -hw, y: -hd },
+    { x: hw, y: -hd },
+    { x: hw, y: hd },
+    { x: -hw, y: hd },
+  ].map((p) => ({ x: cx + p.x * c - p.y * s, y: cy + p.x * s + p.y * c }));
+}
+
+/** Separating-axis overlap test for two convex quads. */
+export function quadsOverlap(a: Point[], b: Point[]): boolean {
+  for (const poly of [a, b]) {
+    for (let i = 0; i < poly.length; i++) {
+      const p1 = poly[i];
+      const p2 = poly[(i + 1) % poly.length];
+      const axis = { x: p2.y - p1.y, y: p1.x - p2.x };
+      let minA = Infinity, maxA = -Infinity, minB = Infinity, maxB = -Infinity;
+      for (const p of a) {
+        const proj = p.x * axis.x + p.y * axis.y;
+        minA = Math.min(minA, proj);
+        maxA = Math.max(maxA, proj);
+      }
+      for (const p of b) {
+        const proj = p.x * axis.x + p.y * axis.y;
+        minB = Math.min(minB, proj);
+        maxB = Math.max(maxB, proj);
+      }
+      if (maxA < minB || maxB < minA) return false;
+    }
+  }
+  return true;
+}
+
 export function midpoint(a: Point, b: Point): Point {
   return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
 }
