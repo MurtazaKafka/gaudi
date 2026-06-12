@@ -10,6 +10,7 @@ const hints: Record<string, string> = {
 };
 
 export function StatusBar() {
+  const mode = useUiStore((s) => s.mode);
   const tool = useUiStore((s) => s.tool);
   const cursor = useUiStore((s) => s.cursor);
   const drawingLength = useUiStore((s) => s.drawingLength);
@@ -17,21 +18,24 @@ export function StatusBar() {
   const wallCount = walls.length;
   const roomCount = useMemo(() => detectRooms(walls).length, [walls]);
 
+  const inPlan = mode === 'plan';
   return (
     <footer className="statusbar">
-      <span className="status-tool">{tool}</span>
+      <span className="status-tool">{inPlan ? tool : 'model'}</span>
       <span className="status-sep" />
       <span className="status-mono">
-        {cursor ? `${cursor.x.toFixed(2)}, ${cursor.y.toFixed(2)} m` : '—'}
+        {inPlan && cursor ? `${cursor.x.toFixed(2)}, ${cursor.y.toFixed(2)} m` : '—'}
       </span>
-      {drawingLength !== null && drawingLength > 0 && (
+      {inPlan && drawingLength !== null && drawingLength > 0 && (
         <>
           <span className="status-sep" />
           <span className="status-mono status-length">{formatMeters(drawingLength)}</span>
         </>
       )}
       <span className="status-spacer" />
-      <span className="status-hint">{hints[tool] ?? ''}</span>
+      <span className="status-hint">
+        {inPlan ? hints[tool] ?? '' : 'drag orbits · scroll zooms · ⇧ drag pans · esc returns to plan'}
+      </span>
       <span className="status-sep" />
       <span className="status-mono">
         {wallCount} wall{wallCount === 1 ? '' : 's'} · {roomCount} room{roomCount === 1 ? '' : 's'}

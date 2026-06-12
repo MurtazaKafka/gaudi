@@ -1,4 +1,5 @@
 import { usePlanStore } from '../store';
+import { useUiStore } from '../uiStore';
 
 function clamp(n: number, lo: number, hi: number) {
   return Math.min(hi, Math.max(lo, n));
@@ -41,6 +42,9 @@ function SettingField({
 export function TopBar() {
   const settings = usePlanStore((s) => s.settings);
   const updateSettings = usePlanStore((s) => s.updateSettings);
+  const hasWalls = usePlanStore((s) => s.walls.length > 0);
+  const mode = useUiStore((s) => s.mode);
+  const setMode = useUiStore((s) => s.setMode);
 
   return (
     <header className="topbar">
@@ -49,6 +53,23 @@ export function TopBar() {
         <span className="brand-rule" />
         <span className="brand-sub">plan&thinsp;→&thinsp;house</span>
       </div>
+
+      <div className="mode-toggle">
+        <button
+          className={mode === 'plan' ? 'active' : ''}
+          onClick={() => setMode('plan')}
+        >
+          Plan
+        </button>
+        <button
+          className={mode === 'model' ? 'active' : ''}
+          disabled={!hasWalls}
+          onClick={() => setMode('model')}
+        >
+          Model
+        </button>
+      </div>
+
       <div className="topbar-right">
         <SettingField
           label="wall height"
@@ -66,7 +87,12 @@ export function TopBar() {
           step={0.05}
           onChange={(v) => updateSettings({ wallThickness: v })}
         />
-        <button className="build-btn" disabled title="3D build arrives in the next slice">
+        <button
+          className="build-btn"
+          disabled={!hasWalls}
+          title={hasWalls ? 'Extrude the plan into 3D' : 'Draw some walls first'}
+          onClick={() => setMode('model')}
+        >
           Build
         </button>
       </div>

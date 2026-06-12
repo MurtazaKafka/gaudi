@@ -93,3 +93,10 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   updateSettings: (patch) =>
     set((s) => ({ settings: { ...s.settings, ...patch } })),
 }));
+
+declare global {
+  interface Window {
+    __plan?: typeof usePlanStore;
+  }
+}
+if (import.meta.env.DEV) window.__plan = usePlanStore;

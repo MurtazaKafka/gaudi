@@ -74,6 +74,7 @@ export function PlanCanvas() {
     const onKeyDown = (e: KeyboardEvent) => {
       if (isTypingTarget(e.target)) return;
       const ui = useUiStore.getState();
+      if (ui.mode !== 'plan') return;
       const plan = usePlanStore.getState();
       if (e.code === 'Space') {
         e.preventDefault();
