@@ -83,7 +83,12 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   },
 
   setRoomName: (key, name) =>
-    set((s) => ({ roomNames: { ...s.roomNames, [key]: name } })),
+    set((s) => {
+      const roomNames = { ...s.roomNames };
+      if (name.trim()) roomNames[key] = name.trim();
+      else delete roomNames[key];
+      return { roomNames };
+    }),
 
   updateSettings: (patch) =>
     set((s) => ({ settings: { ...s.settings, ...patch } })),

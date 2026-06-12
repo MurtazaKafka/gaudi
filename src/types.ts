@@ -21,13 +21,6 @@ export interface Opening {
   width: number;
 }
 
-/** A room is derived from a closed wall loop; `key` is stable across re-detection. */
-export interface Room {
-  key: string;
-  polygon: Point[];
-  area: number;
-}
-
 export interface PlanSettings {
   /** m */ wallHeight: number;
   /** m */ wallThickness: number;

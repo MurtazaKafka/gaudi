@@ -5,6 +5,7 @@ import type { KonvaEventObject } from 'konva/lib/Node';
 import { usePlanStore, type EndpointRef } from '../store';
 import { useUiStore } from '../uiStore';
 import { dist, formatMeters, midpoint, ptEq, snapPoint, type SnapResult } from '../geometry';
+import { detectRooms, type DetectedRoom } from '../rooms';
 import type { Point, Wall } from '../types';
 import { theme } from '../theme';
 
@@ -242,6 +243,9 @@ export function PlanCanvas() {
     [view, size, settings.gridSize],
   );
 
+  const rooms = useMemo(() => detectRooms(walls), [walls]);
+  const [editingRoomKey, setEditingRoomKey] = useState<string | null>(null);
+
   const px = (n: number) => n / view.scale; // px → m at current zoom
 
   return (
@@ -274,6 +278,17 @@ export function PlanCanvas() {
         </Layer>
 
         <Layer>
+          {rooms.map((room) => (
+            <Line
+              key={room.key}
+              points={room.polygon.flatMap((p) => [p.x, p.y])}
+              closed
+              fill={theme.roomFill}
+              listening={tool === 'select'}
+              onDblClick={() => setEditingRoomKey(room.key)}
+            />
+          ))}
+
           {walls.map((w) => (
             <WallLine
               key={w.id}
@@ -348,6 +363,78 @@ export function PlanCanvas() {
           )}
         </Layer>
       </Stage>
+
+      {/* Room labels live in HTML so they stay readable at any zoom. */}
+      {rooms.map((room) => (
+        <RoomLabel
+          key={room.key}
+          room={room}
+          view={view}
+          interactive={tool === 'select'}
+          editing={editingRoomKey === room.key}
+          onStartEdit={() => setEditingRoomKey(room.key)}
+          onEndEdit={() => setEditingRoomKey(null)}
+        />
+      ))}
+    </div>
+  );
+}
+
+function RoomLabel({
+  room,
+  view,
+  interactive,
+  editing,
+  onStartEdit,
+  onEndEdit,
+}: {
+  room: DetectedRoom;
+  view: View;
+  interactive: boolean;
+  editing: boolean;
+  onStartEdit: () => void;
+  onEndEdit: () => void;
+}) {
+  const name = usePlanStore((s) => s.roomNames[room.key]);
+  const setRoomName = usePlanStore((s) => s.setRoomName);
+
+  const sx = room.centroid.x * view.scale + view.tx;
+  const sy = room.centroid.y * view.scale + view.ty;
+
+  if (editing) {
+    return (
+      <input
+        className="room-name-input"
+        style={{ left: sx, top: sy }}
+        defaultValue={name ?? ''}
+        placeholder="Room name"
+        autoFocus
+        onFocus={(e) => e.target.select()}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+          if (e.key === 'Escape') {
+            (e.target as HTMLInputElement).value = name ?? '';
+            (e.target as HTMLInputElement).blur();
+          }
+          e.stopPropagation();
+        }}
+        onBlur={(e) => {
+          setRoomName(room.key, e.target.value);
+          onEndEdit();
+        }}
+      />
+    );
+  }
+
+  return (
+    <div
+      className={`room-label ${interactive ? 'interactive' : ''}`}
+      style={{ left: sx, top: sy }}
+      onDoubleClick={interactive ? onStartEdit : undefined}
+      title={interactive ? 'Double-click to rename' : undefined}
+    >
+      <span className={`room-name ${name ? '' : 'unnamed'}`}>{name ?? 'Room'}</span>
+      <span className="room-area">{room.area.toFixed(1)} m²</span>
     </div>
   );
 }

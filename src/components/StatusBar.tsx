@@ -1,6 +1,8 @@
+import { useMemo } from 'react';
 import { usePlanStore } from '../store';
 import { useUiStore } from '../uiStore';
 import { formatMeters } from '../geometry';
+import { detectRooms } from '../rooms';
 
 const hints: Record<string, string> = {
   wall: 'click to place · enter / esc finishes the run · scroll pans · ⌘ scroll zooms',
@@ -11,7 +13,9 @@ export function StatusBar() {
   const tool = useUiStore((s) => s.tool);
   const cursor = useUiStore((s) => s.cursor);
   const drawingLength = useUiStore((s) => s.drawingLength);
-  const wallCount = usePlanStore((s) => s.walls.length);
+  const walls = usePlanStore((s) => s.walls);
+  const wallCount = walls.length;
+  const roomCount = useMemo(() => detectRooms(walls).length, [walls]);
 
   return (
     <footer className="statusbar">
@@ -29,7 +33,9 @@ export function StatusBar() {
       <span className="status-spacer" />
       <span className="status-hint">{hints[tool] ?? ''}</span>
       <span className="status-sep" />
-      <span className="status-mono">{wallCount} wall{wallCount === 1 ? '' : 's'}</span>
+      <span className="status-mono">
+        {wallCount} wall{wallCount === 1 ? '' : 's'} · {roomCount} room{roomCount === 1 ? '' : 's'}
+      </span>
     </footer>
   );
 }
