@@ -684,3 +684,15 @@ body {
 .status-hint {
   letter-spacing: 0.02em;
 }
+
+.status-credit {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-soft);
+  text-decoration: none;
+  transition: color 100ms ease;
+}
+
+.status-credit:hover {
+  color: var(--accent);
+}

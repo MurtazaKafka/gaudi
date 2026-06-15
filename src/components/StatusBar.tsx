@@ -43,6 +43,16 @@ export function StatusBar() {
       <span className="status-mono">
         {wallCount} wall{wallCount === 1 ? '' : 's'} · {roomCount} room{roomCount === 1 ? '' : 's'}
       </span>
+      <span className="status-sep" />
+      <a
+        className="status-credit"
+        href="https://murtazanikzad.com/"
+        target="_blank"
+        rel="noopener noreferrer"
+        title="Built by Murtaza Nikzad — see more work"
+      >
+        by Murtaza Nikzad ↗
+      </a>
     </footer>
   );
 }
