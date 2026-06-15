@@ -1,6 +1,6 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import * as THREE from 'three';
-import { Canvas } from '@react-three/fiber';
+import { Canvas, useThree } from '@react-three/fiber';
 import { Edges, OrbitControls } from '@react-three/drei';
 import { usePlanStore } from '../store';
 import { buildWallBoxes } from '../build';
@@ -12,6 +12,34 @@ import { theme } from '../theme';
 const WALL_COLOR = '#efebe1';
 const FLOOR_COLOR = '#d9d3c5';
 const GROUND_COLOR = '#eae6dc';
+
+declare global {
+  interface Window {
+    __three?: {
+      camera: THREE.PerspectiveCamera;
+      controls: { target: THREE.Vector3; update: () => void; enableDamping: boolean } | null;
+      gl: THREE.WebGLRenderer;
+    };
+  }
+}
+
+type ThreeHandles = NonNullable<Window['__three']>;
+
+/** Dev-only: expose camera + OrbitControls so the demo recorder can drive the orbit. */
+function DevHandles() {
+  const camera = useThree((s) => s.camera);
+  const controls = useThree((s) => s.controls);
+  const gl = useThree((s) => s.gl);
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    window.__three = {
+      camera: camera as THREE.PerspectiveCamera,
+      controls: controls as unknown as ThreeHandles['controls'],
+      gl,
+    };
+  }, [camera, controls, gl]);
+  return null;
+}
 
 export function Scene3D() {
   const walls = usePlanStore((s) => s.walls);
@@ -51,6 +79,7 @@ export function Scene3D() {
   return (
     <div className="scene-3d">
       <Canvas shadows camera={{ position: camPos, fov: 42 }}>
+        <DevHandles />
         <color attach="background" args={[theme.paper]} />
 
         {/* warm key light + cool sky fill: maquette under a studio lamp */}

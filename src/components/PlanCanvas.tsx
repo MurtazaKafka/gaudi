@@ -38,6 +38,7 @@ interface OpeningGhost {
 declare global {
   interface Window {
     __view?: View;
+    __rooms?: DetectedRoom[];
   }
 }
 
@@ -378,6 +379,9 @@ export function PlanCanvas() {
   useEffect(() => {
     if (import.meta.env.DEV) window.__view = view;
   }, [view]);
+  useEffect(() => {
+    if (import.meta.env.DEV) window.__rooms = rooms;
+  }, [rooms]);
 
   const px = (n: number) => n / view.scale; // px → m at current zoom
 
