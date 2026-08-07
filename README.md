@@ -43,6 +43,20 @@ windows, and existing furniture, and proposes a layout from the parametric
 catalog as structured JSON. Suggestions appear as ghosts; geometry validation
 drops anything outside the room or overlapping before you accept.
 
+## Sharing
+
+**Share** (top bar) publishes the current plan at `#/p/{id}` — a link anyone
+can open. Viewers get a read-only canvas with comments, plus **Propose
+changes**: they edit a scratch copy (their own plan and yours stay untouched)
+and submit it as a draft. You review drafts in the Share panel — preview on
+the canvas, then accept (it becomes the live plan, like merging a PR) or
+dismiss. Accepting and publishing require the owner key, which never leaves
+your browser; the server stores only its hash.
+
+Backend: Vercel serverless functions + Blob storage, append-only revisions.
+Local dev: `node scripts/share-dev.mjs` runs the same API against a local
+directory on :5177.
+
 ## Deploy
 
 Static Vite build, no backend:

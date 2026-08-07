@@ -83,6 +83,7 @@ export function PlanCanvas() {
   const furniture = usePlanStore((s) => s.furniture);
   const settings = usePlanStore((s) => s.settings);
   const tool = useUiStore((s) => s.tool);
+  const readOnly = useUiStore((s) => s.readOnly);
   const selectedWallIds = useUiStore((s) => s.selectedWallIds);
   const selectedOpeningIds = useUiStore((s) => s.selectedOpeningIds);
   const selectedFurnitureIds = useUiStore((s) => s.selectedFurnitureIds);
@@ -133,7 +134,7 @@ export function PlanCanvas() {
     const onKeyDown = (e: KeyboardEvent) => {
       if (isTypingTarget(e.target)) return;
       const ui = useUiStore.getState();
-      if (ui.mode !== 'plan') return;
+      if (ui.mode !== 'plan' || ui.readOnly) return;
       const plan = usePlanStore.getState();
       if (e.code === 'Space') {
         e.preventDefault();
@@ -421,7 +422,7 @@ export function PlanCanvas() {
               points={room.polygon.flatMap((p) => [p.x, p.y])}
               closed
               fill={selectedRoomKey === room.key ? theme.accentSoft : theme.roomFill}
-              listening={tool === 'select'}
+              listening={tool === 'select' && !readOnly}
               onClick={(e) => {
                 if (e.evt.button !== 0) return;
                 e.cancelBubble = true;
@@ -437,7 +438,7 @@ export function PlanCanvas() {
               item={f}
               scale={view.scale}
               selected={selectedFurnitureIds.includes(f.id)}
-              interactive={tool === 'select'}
+              interactive={tool === 'select' && !readOnly}
             />
           ))}
 
@@ -479,7 +480,7 @@ export function PlanCanvas() {
               scale={view.scale}
               selected={selectedWallIds.includes(w.id)}
               hovered={hoverWallId === w.id}
-              interactive={tool === 'select'}
+              interactive={tool === 'select' && !readOnly}
               onHover={(h) => setHoverWallId(h ? w.id : null)}
             />
           ))}
@@ -495,7 +496,7 @@ export function PlanCanvas() {
                 thickness={settings.wallThickness}
                 scale={view.scale}
                 selected={selectedOpeningIds.includes(o.id)}
-                interactive={tool === 'select'}
+                interactive={tool === 'select' && !readOnly}
               />
             );
           })}
@@ -591,7 +592,7 @@ export function PlanCanvas() {
           key={room.key}
           room={room}
           view={view}
-          interactive={tool === 'select'}
+          interactive={tool === 'select' && !readOnly}
           editing={editingRoomKey === room.key}
           onStartEdit={() => setEditingRoomKey(room.key)}
           onEndEdit={() => setEditingRoomKey(null)}

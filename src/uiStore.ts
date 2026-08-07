@@ -8,6 +8,8 @@ export type ViewMode = 'plan' | 'model';
 interface UiState {
   mode: ViewMode;
   tool: Tool;
+  /** Viewing someone else's plan (or a proposal preview): no mutations. */
+  readOnly: boolean;
   selectedWallIds: string[];
   selectedOpeningIds: string[];
   selectedFurnitureIds: string[];
@@ -23,6 +25,7 @@ interface UiState {
 
   setMode: (mode: ViewMode) => void;
   setTool: (tool: Tool) => void;
+  setReadOnly: (readOnly: boolean) => void;
   setSelection: (ids: string[]) => void;
   toggleSelected: (id: string) => void;
   setOpeningSelection: (ids: string[]) => void;
@@ -37,6 +40,7 @@ interface UiState {
 export const useUiStore = create<UiState>((set) => ({
   mode: 'plan',
   tool: 'wall',
+  readOnly: false,
   selectedWallIds: [],
   selectedOpeningIds: [],
   selectedFurnitureIds: [],
@@ -47,6 +51,7 @@ export const useUiStore = create<UiState>((set) => ({
   drawingLength: null,
 
   setMode: (mode) => set({ mode }),
+  setReadOnly: (readOnly) => set({ readOnly }),
   setTool: (tool) =>
     set((s) => ({
       tool,

@@ -23,3 +23,6 @@ dist-ssr
 *.sln
 *.sw?
 .vercel
+.share-dev-store
+.env.local
+.share-dev-build
