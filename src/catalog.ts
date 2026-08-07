@@ -267,13 +267,13 @@ export const FURNITURE = {
     parts: [cyl(0, 0.01, 0, 0.8, 0.02, '#cdbfa4')],
   },
   stage: {
-    label: 'Stage',
-    w: 5.5,
-    d: 4.5,
-    h: 0.6,
+    label: "Stage riser (6'×8')",
+    w: 2.4,
+    d: 1.8,
+    h: 0.45,
     parts: [
-      box(0, 0.275, 0, 5.5, 0.55, 4.5, wood),
-      box(0, 0.575, 0, 5.6, 0.05, 4.6, woodDk),
+      box(0, 0.21, 0, 2.4, 0.42, 1.8, wood),
+      box(0, 0.44, 0, 2.5, 0.04, 1.9, woodDk),
     ],
   },
   event_table: {
