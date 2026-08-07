@@ -19,6 +19,8 @@ export interface Opening {
   type: OpeningType;
   offset: number;
   width: number;
+  /** Optional annotation shown beside the opening (e.g. "Main Entrance"). */
+  label?: string;
 }
 
 import type { FurnitureKind } from './catalog';
@@ -30,6 +32,8 @@ export interface Furniture {
   x: number;
   y: number;
   rotation: number;
+  /** Optional annotation shown on the plan (e.g. "#7", "Stage"). */
+  label?: string;
 }
 
 export interface PlanSettings {

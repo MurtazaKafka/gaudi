@@ -266,6 +266,51 @@ export const FURNITURE = {
     h: 0.02,
     parts: [cyl(0, 0.01, 0, 0.8, 0.02, '#cdbfa4')],
   },
+  stage: {
+    label: 'Stage',
+    w: 5.5,
+    d: 4.5,
+    h: 0.6,
+    parts: [
+      box(0, 0.275, 0, 5.5, 0.55, 4.5, wood),
+      box(0, 0.575, 0, 5.6, 0.05, 4.6, woodDk),
+    ],
+  },
+  event_table: {
+    label: 'Event table',
+    w: 1.8,
+    d: 0.75,
+    h: 0.75,
+    parts: [box(0, 0.73, 0, 1.8, 0.04, 0.75, wood), ...legs(1.8, 0.75, 0.71)],
+  },
+  speaker: {
+    label: 'Speaker',
+    w: 0.6,
+    d: 0.5,
+    h: 1.8,
+    parts: [
+      box(0, 0.9, 0, 0.6, 1.8, 0.5, dark),
+      box(0, 1.15, 0.24, 0.5, 1.1, 0.03, screen),
+    ],
+  },
+  mic: {
+    label: 'Microphone',
+    w: 0.4,
+    d: 0.4,
+    h: 1.5,
+    parts: [
+      cyl(0, 0.015, 0, 0.18, 0.03, steel),
+      cyl(0, 0.72, 0, 0.025, 1.4, steel),
+      { shape: 'sphere', x: 0, y: 1.45, z: 0, r: 0.06, color: dark },
+    ],
+  },
+  trash_bin: {
+    label: 'Trash bin',
+    w: 0.5,
+    d: 0.5,
+    h: 0.85,
+    parts: [cyl(0, 0.425, 0, 0.25, 0.85, steel)],
+  },
   plant: {
     label: 'Plant',
     w: 0.45,

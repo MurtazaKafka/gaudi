@@ -7,6 +7,7 @@ const groups: { title: string; kinds: FurnitureKind[] }[] = [
   { title: 'Dining & work', kinds: ['dining_table', 'chair', 'desk'] },
   { title: 'Kitchen', kinds: ['counter', 'kitchen_sink', 'stove', 'fridge'] },
   { title: 'Bath', kinds: ['toilet', 'bathroom_sink', 'bathtub'] },
+  { title: 'Event', kinds: ['stage', 'event_table', 'speaker', 'mic', 'trash_bin'] },
 ];
 
 // Safety net: anything new in the catalog shows up unguarded at the bottom.

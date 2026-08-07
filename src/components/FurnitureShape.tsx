@@ -1,4 +1,4 @@
-import { Arc, Circle, Ellipse, Group, Line, Rect } from 'react-konva';
+import { Arc, Circle, Ellipse, Group, Line, Rect, Text } from 'react-konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
 import { furnitureDef } from '../catalog';
 import type { Furniture } from '../types';
@@ -57,6 +57,21 @@ export function FurnitureShape({
       }}
     >
       <Symbol kind={item.kind} w={def.w} d={def.d} stroke={stroke} fill={fill} thin={thin} />
+      {item.label && !ghost && (
+        // Counter-rotate so annotations stay horizontal whatever the item's rotation.
+        <Group rotation={(-item.rotation * 180) / Math.PI} listening={false}>
+          <Text
+            text={item.label}
+            fontSize={11 / scale}
+            fontFamily="'IBM Plex Mono', monospace"
+            fill={ghost ? theme.accent : theme.ink}
+            width={4}
+            offsetX={2}
+            offsetY={5.5 / scale}
+            align="center"
+          />
+        </Group>
+      )}
       {selected && !ghost && (
         <Rect
           x={-def.w / 2 - 3 / scale}
@@ -131,7 +146,43 @@ function Symbol({
     case 'dining_table':
     case 'coffee_table':
     case 'desk':
+    case 'event_table':
       return base;
+    case 'stage':
+      return (
+        <>
+          {base}
+          <Rect
+            x={-hw + 0.15}
+            y={-hd + 0.15}
+            width={w - 0.3}
+            height={d - 0.3}
+            stroke={stroke}
+            strokeWidth={thin / 1.5}
+          />
+        </>
+      );
+    case 'speaker':
+      return (
+        <>
+          {base}
+          <Circle x={0} y={0.02} radius={Math.min(hw, hd) * 0.55} stroke={stroke} strokeWidth={thin} />
+        </>
+      );
+    case 'mic':
+      return (
+        <>
+          <Circle radius={hw * 0.8} stroke={stroke} strokeWidth={thin} fill={fill} />
+          <Circle radius={hw * 0.28} stroke={stroke} strokeWidth={thin / 1.5} />
+        </>
+      );
+    case 'trash_bin':
+      return (
+        <>
+          <Circle radius={hw} stroke={stroke} strokeWidth={thin} fill={fill} />
+          <Line points={[-hw * 0.45, 0, hw * 0.45, 0]} stroke={stroke} strokeWidth={thin / 1.5} />
+        </>
+      );
     case 'rug':
       return (
         <Circle radius={hw} stroke={stroke} strokeWidth={thin} dash={[0.08, 0.06]} fill={fill} />

@@ -82,6 +82,7 @@ export function importPlanJSON(text: string): { ok: true } | { ok: false; error:
       type: o.type,
       offset: o.offset,
       width: o.width,
+      ...(typeof o.label === 'string' ? { label: o.label } : {}),
     });
   }
 
@@ -100,6 +101,7 @@ export function importPlanJSON(text: string): { ok: true } | { ok: false; error:
       x: fu.x,
       y: fu.y,
       rotation: fu.rotation,
+      ...(typeof fu.label === 'string' ? { label: fu.label } : {}),
     });
   }
 

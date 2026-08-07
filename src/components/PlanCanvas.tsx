@@ -819,9 +819,28 @@ function OpeningShape({
   const thin = 1.2 / scale;
   const ink = ghost ? theme.accent : selected ? theme.accent : theme.ink;
   const soft = ghost ? theme.accent : selected ? theme.accent : theme.inkSoft;
+  // Wall-perpendicular direction, used to place the annotation beside the gap.
+  const nx = (wall.b.y - wall.a.y) / len;
+  const ny = -((wall.b.x - wall.a.x) / len);
 
   return (
-    <Group x={cx} y={cy} rotation={deg} opacity={ghost ? 0.55 : 1} listening={interactive}>
+    <>
+      {opening.label && !ghost && (
+        <Text
+          x={cx + nx * 0.55}
+          y={cy + ny * 0.55}
+          text={opening.label}
+          fontSize={13 / scale}
+          fontFamily="'IBM Plex Mono', monospace"
+          fill={theme.ink}
+          width={6}
+          offsetX={3}
+          offsetY={6.5 / scale}
+          align="center"
+          listening={false}
+        />
+      )}
+      <Group x={cx} y={cy} rotation={deg} opacity={ghost ? 0.55 : 1} listening={interactive}>
       {/* the gap: paint over the wall stroke */}
       <Rect
         x={-half}
@@ -894,7 +913,8 @@ function OpeningShape({
           listening={false}
         />
       )}
-    </Group>
+      </Group>
+    </>
   );
 }
 
