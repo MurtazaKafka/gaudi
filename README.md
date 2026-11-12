@@ -111,13 +111,15 @@ directory on :5177.
 
 ## Deploy
 
-```sh
-npm run build        # outputs dist/
-vercel               # static app + the functions in api/
-```
+Live at https://gaudi-tau.vercel.app. The Vercel project is connected to this
+GitHub repo: every push to `main` deploys to production, and every other
+branch or pull request gets its own preview URL. No manual step.
 
-The functions need `BLOB_READ_WRITE_TOKEN` (Vercel Blob) for sharing. As a
-purely static site everything except sharing and product-link reading works.
+To deploy by hand anyway: `vercel --prod`. Locally, `npm run build` outputs `dist/`.
+
+The functions need `BLOB_READ_WRITE_TOKEN` (Vercel Blob) for sharing; it is set
+in the project. As a purely static site everything except sharing and
+product-link reading works.
 
 ## Still out of scope
 
