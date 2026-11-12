@@ -97,7 +97,7 @@ const SHAPE_PATH: Record<Exclude<ShapeId, 'any'>, string> = {
   step: 'M3.5 12.5h5v-4.5h5v-4.5h5v15h-15z',
 };
 
-function ShapeIcon({ id }: { id: ShapeId }) {
+export function ShapeIcon({ id }: { id: ShapeId }) {
   return (
     <svg width="22" height="22" viewBox="0 0 22 22" fill="none" aria-hidden="true">
       {id === 'any' ? (

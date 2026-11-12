@@ -1,0 +1,180 @@
+/* The start sheet on an empty canvas, and the "fill your outline" bar. */
+
+.start {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 4;
+  width: min(660px, calc(100% - 32px));
+  max-height: calc(100% - 32px);
+  overflow-y: auto;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px 22px 18px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 10px 40px rgba(33, 31, 27, 0.12);
+}
+
+.st-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.st-title {
+  margin-bottom: 4px;
+  font-family: var(--serif);
+  font-style: italic;
+  font-weight: 600;
+  font-size: 23px;
+  color: var(--ink);
+}
+
+.st-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.st-section + .st-section {
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.st-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 24px;
+}
+
+.st-draw .st-row {
+  gap: 8px;
+}
+
+.st-count {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.st-block {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.st-shapes {
+  display: grid;
+  grid-template-columns: repeat(11, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.st-shape {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 0 5px;
+  font-family: var(--sans);
+  font-size: 9.5px;
+  white-space: nowrap;
+  color: var(--ink-soft);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color 100ms ease, border-color 100ms ease, background 100ms ease;
+}
+
+.st-shape:hover {
+  color: var(--ink);
+}
+
+.st-shape.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: rgba(193, 78, 51, 0.35);
+}
+
+.st-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.st-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.st-actions .btn.primary {
+  padding: 9px 18px;
+}
+
+.st-words {
+  display: flex;
+  gap: 8px;
+}
+
+.st-templates {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.st-template {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 6px;
+  font-family: var(--sans);
+  text-align: left;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  cursor: pointer;
+  transition: border-color 100ms ease, background 100ms ease;
+}
+
+.st-template:hover {
+  border-color: rgba(193, 78, 51, 0.4);
+  background: var(--accent-soft);
+}
+
+.st-template svg {
+  align-self: center;
+}
+
+.st-template-name {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.st-template-sub {
+  font-size: 10px;
+  color: var(--ink-soft);
+}
+
+.st-fill {
+  z-index: 6;
+}
+
+@media (max-width: 720px) {
+  .st-shapes {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .st-templates {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}

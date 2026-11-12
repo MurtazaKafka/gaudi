@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { TopBar } from './components/TopBar';
 import { Toolbar } from './components/Toolbar';
 import { StatusBar } from './components/StatusBar';
@@ -11,7 +11,8 @@ import { CommandBar } from './components/CommandBar';
 import { KeyDialog } from './components/KeyDialog';
 import { Toasts } from './components/Toasts';
 import { PreviewBar } from './components/PreviewBar';
-import { EmptyState } from './components/EmptyState';
+import { FillOutlineBar, StartScreen } from './components/StartScreen';
+import { readOutline } from './generate/outline';
 import { ShortcutsDialog } from './components/ShortcutsDialog';
 import { usePlanStore } from './store';
 import { useUiStore } from './uiStore';
@@ -50,6 +51,8 @@ export default function App() {
   const previewing = usePreviewStore((s) => s.active);
   const isEmpty = usePlanStore((s) => s.walls.length === 0 && s.furniture.length === 0);
   const [emptyDismissed, setEmptyDismissed] = useState(false);
+  // Dismissing the start sheet lasts until the plan has something in it; an emptied plan offers it again.
+  if (!isEmpty && emptyDismissed) setEmptyDismissed(false);
 
   // App-wide keys. Tool keys live in PlanCanvas; these work in every view.
   useEffect(() => {
@@ -134,7 +137,15 @@ export default function App() {
   }, []);
 
   const showEmpty =
-    mode === 'plan' && isEmpty && !readOnly && !panel && !emptyDismissed && tool !== 'furniture';
+    mode === 'plan' && isEmpty && !readOnly && !panel && !emptyDismissed && tool !== 'furniture' && !previewing;
+  // A bare outline (closed walls, nothing inside yet) gets an offer to fill it with rooms.
+  const walls = usePlanStore((s) => s.walls);
+  const hasFurniture = usePlanStore((s) => s.furniture.length > 0);
+  const bareOutline = useMemo(
+    () => (walls.length > 0 && !hasFurniture ? readOutline(walls) : null),
+    [walls, hasFurniture],
+  );
+  const showFill = mode === 'plan' && !readOnly && !panel && !previewing && bareOutline !== null && !bareOutline.issue;
 
   return (
     <div className="app">
@@ -156,7 +167,8 @@ export default function App() {
           <div className="view-plan" style={{ display: mode === 'plan' ? undefined : 'none' }}>
             <PlanCanvas />
           </div>
-          {showEmpty && <EmptyState onDismiss={() => setEmptyDismissed(true)} />}
+          {showEmpty && <StartScreen onDismiss={() => setEmptyDismissed(true)} />}
+          {showFill && <FillOutlineBar area={bareOutline.area} />}
           {mode === 'model' && (
             <Suspense fallback={<div className="scene-loading">building…</div>}>
               <Scene3D />
