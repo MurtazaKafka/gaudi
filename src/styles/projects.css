@@ -1,0 +1,279 @@
+/* Projects panel, templates, and the additions to the share drawer.
+   Built on the kit (kit.css); only what the kit does not have lives here. */
+
+/* ---------- project list ---------- */
+
+.pj-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pj-card {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  transition: border-color 100ms ease;
+}
+
+.pj-card:hover,
+.pj-card:focus-within {
+  border-color: #c9c4b8;
+}
+
+.pj-card.current {
+  border-color: rgba(193, 78, 51, 0.45);
+  background: var(--accent-soft);
+}
+
+.pj-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  font-family: var(--sans);
+  text-align: left;
+  color: var(--ink);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+div.pj-open {
+  cursor: default;
+}
+
+.pj-thumb {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 48px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.pj-meta {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pj-name {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pj-sub,
+.pj-lineage {
+  font-size: 10.5px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pj-sub {
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.pj-lineage {
+  font-style: italic;
+}
+
+.pj-rename {
+  width: 100%;
+  padding: 3px 5px;
+  font-family: var(--sans);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  outline: none;
+}
+
+/* Actions stay out of the way until the card is pointed at or focused. */
+.pj-actions {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  gap: 1px;
+  padding: 1px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 100ms ease;
+}
+
+.pj-card:hover .pj-actions,
+.pj-card:focus-within .pj-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.pj-actions .icon-btn {
+  width: 22px;
+  height: 22px;
+}
+
+/* ---------- templates ---------- */
+
+.pj-templates {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.pj-template {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  padding: 7px 7px 6px;
+  font-family: var(--sans);
+  text-align: left;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: border-color 100ms ease, background 100ms ease;
+}
+
+.pj-template:hover,
+.pj-template:focus-visible {
+  border-color: rgba(193, 78, 51, 0.45);
+  background: var(--accent-soft);
+  outline: none;
+}
+
+.pj-template-thumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 78px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.pj-template-name {
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+.pj-template-sub {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-soft);
+}
+
+/* ---------- share drawer additions ---------- */
+
+/* Same width as the other right-hand panels. */
+.share-drawer {
+  width: 300px;
+}
+
+.share-drawer .sd-row {
+  flex-wrap: wrap;
+}
+
+.share-drawer .btn {
+  width: 100%;
+}
+
+.share-drawer .sd-row .btn,
+.share-drawer .sd-linkrow .btn,
+.share-drawer .sd-role .btn {
+  width: auto;
+}
+
+.sd-row .btn {
+  flex: 1;
+  padding: 4px 4px;
+}
+
+.sd-role {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sd-role-name {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.sd-role-sub {
+  display: block;
+  font-size: 10.5px;
+  color: var(--ink-soft);
+}
+
+.sd-proposal-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.sd-status {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.sd-status-changes {
+  color: var(--accent);
+}
+
+.sd-status-accepted {
+  color: #4a7040;
+}
+
+.sd-review-note {
+  padding-left: 7px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--ink);
+  border-left: 2px solid var(--accent);
+}
+
+.sd-settled {
+  opacity: 0.6;
+}
+
+.sd-reviewing {
+  border-color: rgba(193, 78, 51, 0.45);
+  background: var(--accent-soft);
+}

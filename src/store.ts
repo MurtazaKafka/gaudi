@@ -1,7 +1,18 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
-import type { Furniture, Opening, OpeningType, PlanSettings, Point, Wall } from './types';
-import type { FurnitureKind } from './catalog';
+import { createJSONStorage, persist } from 'zustand/middleware';
+import { toastError } from './toast';
+import type {
+  CustomItem,
+  Furniture,
+  Opening,
+  OpeningType,
+  PlanData,
+  PlanLook,
+  PlanSettings,
+  Point,
+  Wall,
+} from './types';
+import { customKind, setCustomDefs, type FurnitureKind } from './catalog';
 import { dist, ptEq } from './geometry';
 
 export const DEFAULT_OPENING_WIDTH: Record<OpeningType, number> = {
@@ -45,12 +56,7 @@ export interface EndpointRef {
   end: 'a' | 'b';
 }
 
-interface PlanState {
-  walls: Wall[];
-  openings: Opening[];
-  furniture: Furniture[];
-  roomNames: Record<string, string>;
-  settings: PlanSettings;
+export interface PlanState extends PlanData {
 
   addWall: (a: Point, b: Point) => void;
   deleteWalls: (ids: string[]) => void;
@@ -70,22 +76,109 @@ interface PlanState {
   deleteFurniture: (ids: string[]) => void;
   setRoomName: (key: string, name: string) => void;
   updateSettings: (patch: Partial<PlanSettings>) => void;
+  /** Patch any fields of one furniture item (label, kind, position…). */
+  updateFurniture: (id: string, patch: Partial<Omit<Furniture, 'id'>>) => void;
+  /** Add or replace a plan-local furniture definition. */
+  putCustomItem: (item: CustomItem) => void;
+  /** Remove a custom definition and every placed instance of it. */
+  removeCustomItem: (id: string) => void;
+  setLook: (patch: Partial<PlanLook>) => void;
+  setName: (name: string) => void;
+  /** Replace the whole document. Prefer `applyPlanData` (plan.ts), which also handles history. */
+  setPlan: (plan: PlanData) => void;
 }
 
 export const defaultSettings: PlanSettings = {
   wallHeight: 2.7,
   wallThickness: 0.1,
   gridSize: 0.5,
+  units: 'm',
+};
+
+export const defaultLook: PlanLook = { style: 'maquette', roof: 'none' };
+
+export const DEFAULT_PLAN_NAME = 'Untitled plan';
+
+export function emptyPlanData(): PlanData {
+  return {
+    name: DEFAULT_PLAN_NAME,
+    walls: [],
+    openings: [],
+    furniture: [],
+    roomNames: {},
+    settings: { ...defaultSettings },
+    customItems: {},
+    look: { ...defaultLook },
+  };
+}
+
+/** The document fields of the store — the single list of what "the plan" is. */
+export const PLAN_KEYS = [
+  'name',
+  'walls',
+  'openings',
+  'furniture',
+  'roomNames',
+  'settings',
+  'customItems',
+  'look',
+] as const satisfies readonly (keyof PlanData)[];
+
+export function pickPlan(s: PlanData): PlanData {
+  return {
+    name: s.name,
+    walls: s.walls,
+    openings: s.openings,
+    furniture: s.furniture,
+    roomNames: s.roomNames,
+    settings: s.settings,
+    customItems: s.customItems,
+    look: s.look,
+  };
+}
+
+let lastFullWarning = 0;
+
+/** When the "storage is full" notice below was last shown (epoch ms, 0 = never), so nothing else repeats it. */
+export const lastStorageWarning = (): number => lastFullWarning;
+
+/**
+ * localStorage, except a refused write (quota, private mode) is reported
+ * instead of thrown — a throw here would escape from whichever store action
+ * happened to trigger the save and leave the app half-updated.
+ */
+const safeStorage = {
+  getItem: (key: string) => {
+    try {
+      return localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  },
+  setItem: (key: string, value: string) => {
+    try {
+      localStorage.setItem(key, value);
+    } catch {
+      const now = Date.now();
+      if (now - lastFullWarning > 30_000) {
+        lastFullWarning = now;
+        toastError("This browser's storage is full — changes aren't being saved. Export the plan, or delete old projects.");
+      }
+    }
+  },
+  removeItem: (key: string) => {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      /* nothing to do */
+    }
+  },
 };
 
 export const usePlanStore = create<PlanState>()(
   persist(
     (set, get) => ({
-      walls: [],
-      openings: [],
-      furniture: [],
-      roomNames: {},
-      settings: { ...defaultSettings },
+      ...emptyPlanData(),
 
   addWall: (a, b) => {
     if (ptEq(a, b)) return;
@@ -214,19 +307,54 @@ export const usePlanStore = create<PlanState>()(
 
   updateSettings: (patch) =>
     set((s) => ({ settings: { ...s.settings, ...patch } })),
+
+  updateFurniture: (id, patch) =>
+    set((s) => ({
+      furniture: s.furniture.map((f) => (f.id === id ? { ...f, ...patch } : f)),
+    })),
+
+  putCustomItem: (item) =>
+    set((s) => ({ customItems: { ...s.customItems, [item.id]: item } })),
+
+  removeCustomItem: (id) =>
+    set((s) => {
+      const customItems = { ...s.customItems };
+      delete customItems[id];
+      const kind = customKind(id);
+      return { customItems, furniture: s.furniture.filter((f) => f.kind !== kind) };
+    }),
+
+  setLook: (patch) => set((s) => ({ look: { ...s.look, ...patch } })),
+
+  setName: (name) => set({ name: name.trim().slice(0, 80) || DEFAULT_PLAN_NAME }),
+
+  setPlan: (plan) => set(pickPlan(plan)),
     }),
     {
       name: 'gaudi-plan-v1',
-      partialize: (s) => ({
-        walls: s.walls,
-        openings: s.openings,
-        furniture: s.furniture,
-        roomNames: s.roomNames,
-        settings: s.settings,
-      }),
+      storage: createJSONStorage(() => safeStorage),
+      partialize: (s) => pickPlan(s),
+      // Plans saved before a field existed pick up its default.
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<PlanData>;
+        return {
+          ...current,
+          ...p,
+          name: typeof p.name === 'string' && p.name ? p.name : current.name,
+          settings: { ...defaultSettings, ...(p.settings ?? {}) },
+          customItems: p.customItems ?? {},
+          look: { ...defaultLook, ...(p.look ?? {}) },
+        };
+      },
     },
   ),
 );
+
+// Keep catalog lookups (`furnitureDef('custom:…')`) in step with the plan.
+setCustomDefs(usePlanStore.getState().customItems);
+usePlanStore.subscribe((s, prev) => {
+  if (s.customItems !== prev.customItems) setCustomDefs(s.customItems);
+});
 
 declare global {
   interface Window {

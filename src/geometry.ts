@@ -147,7 +147,3 @@ export function wallLength(w: Wall): number {
 export function wallAngle(w: Wall): number {
   return Math.atan2(w.b.y - w.a.y, w.b.x - w.a.x);
 }
-
-export function formatMeters(m: number): string {
-  return `${m.toFixed(2)} m`;
-}

@@ -1,0 +1,7 @@
+/* Export menu — built from the kit's .menu; only what the kit lacks lives here. */
+
+.export-menu {
+  min-width: 216px;
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+}

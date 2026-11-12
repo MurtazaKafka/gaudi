@@ -1,31 +1,72 @@
-import { Arc, Circle, Ellipse, Group, Line, Rect, Text } from 'react-konva';
+import { memo, useCallback, useEffect, useRef } from 'react';
+import { Arc, Circle, Ellipse, Group, Line, Rect, Shape, Text } from 'react-konva';
+import type Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
-import { furnitureDef } from '../catalog';
-import type { Furniture } from '../types';
+import { customId, furnitureDef, isCustomKind, type FurnitureDef } from '../catalog';
+import type { Furniture, Point } from '../types';
 import { usePlanStore } from '../store';
 import { useUiStore } from '../uiStore';
+import { beginGesture, endGesture } from '../history';
+import { ptEq } from '../geometry';
+import { currentUnits } from '../units';
 import { theme } from '../theme';
+import { placeFurniture } from './plan/actions';
+import { fineStep, snapPointTo } from './plan/drafting';
+import type { DrawingLook } from './plan/look';
+import { planShapes, traceShape, traceShapes } from './plan/symbol';
 
-const SNAP = 0.05;
+/** Click selects one item; Shift-click adds to or removes from a furniture-only selection. */
+function clickFurniture(id: string, additive: boolean): void {
+  const ui = useUiStore.getState();
+  if (!additive) {
+    ui.setFurnitureSelection([id]);
+    return;
+  }
+  const ids = ui.selectedFurnitureIds;
+  ui.setFurnitureSelection(ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]);
+}
 
-/** Top-view plan symbol for one furniture item; draggable in select mode. */
-export function FurnitureShape({
+/**
+ * One furniture item on the plan; draggable in select mode. In the Color look
+ * it is drawn from above out of its real parts and colours; in the Paper look,
+ * and for ghosts (previews, placement), as a line symbol.
+ */
+export const FurnitureShape = memo(function FurnitureShape({
   item,
   scale,
   selected,
   interactive,
   ghost = false,
+  look = 'paper',
 }: {
-  item: Furniture;
+  item: Omit<Furniture, 'id'> & { id: string };
   scale: number;
   selected: boolean;
   interactive: boolean;
   ghost?: boolean;
+  look?: DrawingLook;
 }) {
-  const def = furnitureDef(item.kind);
+  // Custom definitions live in the plan: re-render when this one changes.
+  const custom = usePlanStore((s) =>
+    isCustomKind(item.kind) ? s.customItems[customId(item.kind)] : undefined,
+  );
+  const def: FurnitureDef = custom ?? furnitureDef(item.kind);
   const thin = 1.1 / scale;
-  const stroke = ghost || selected ? theme.accent : '#8d8779';
+  const stroke = ghost || selected ? theme.accent : theme.furnitureLine;
   const fill = ghost ? 'rgba(193, 78, 51, 0.06)' : 'rgba(252, 251, 248, 0.85)';
+  // A custom item whose definition is gone keeps its crossed placeholder in either look.
+  const furnished = look === 'color' && !ghost && !(isCustomKind(item.kind) && !custom);
+
+  const drag = useRef<{ start: Map<string, Point>; last: Point } | null>(null);
+  useEffect(
+    () => () => {
+      if (drag.current) {
+        drag.current = null;
+        endGesture();
+      }
+    },
+    [],
+  );
 
   return (
     <Group
@@ -35,36 +76,65 @@ export function FurnitureShape({
       opacity={ghost ? 0.65 : 1}
       draggable={interactive}
       listening={interactive}
+      cursor="move"
       onClick={(e: KonvaEventObject<MouseEvent>) => {
         if (e.evt.button !== 0) return;
         e.cancelBubble = true;
-        useUiStore.getState().setFurnitureSelection([item.id]);
+        clickFurniture(item.id, e.evt.shiftKey);
       }}
-      onDragStart={() => useUiStore.getState().setFurnitureSelection([item.id])}
+      onDragStart={() => {
+        // Dragging one of several selected items moves them together.
+        const ui = useUiStore.getState();
+        let ids = ui.selectedFurnitureIds;
+        if (!ids.includes(item.id)) {
+          ids = [item.id];
+          ui.setFurnitureSelection(ids);
+        }
+        const start = new Map<string, Point>();
+        for (const f of usePlanStore.getState().furniture) {
+          if (ids.includes(f.id)) start.set(f.id, { x: f.x, y: f.y });
+        }
+        drag.current = { start, last: { x: item.x, y: item.y } };
+        beginGesture();
+      }}
+      onDragMove={(e) => {
+        const d = drag.current;
+        const from = d?.start.get(item.id);
+        if (!d || !from) return;
+        // Same snap as placement, so a dragged item lands where a placed one would.
+        const p = snapPointTo(e.target.position(), fineStep(currentUnits()));
+        e.target.position(p);
+        if (ptEq(p, d.last)) return;
+        d.last = p;
+        placeFurniture(d.start, { x: p.x - from.x, y: p.y - from.y });
+      }}
       onDragEnd={(e) => {
-        const x = Math.round(e.target.x() / SNAP) * SNAP;
-        const y = Math.round(e.target.y() / SNAP) * SNAP;
-        e.target.position({ x, y });
-        usePlanStore.getState().moveFurniture(item.id, x, y);
-      }}
-      onMouseEnter={(e) => {
-        const stage = e.target.getStage();
-        if (stage && interactive) stage.container().style.cursor = 'move';
-      }}
-      onMouseLeave={(e) => {
-        const stage = e.target.getStage();
-        if (stage) stage.container().style.cursor = '';
+        const now = usePlanStore.getState().furniture.find((f) => f.id === item.id);
+        if (now) e.target.position({ x: now.x, y: now.y });
+        if (!drag.current) return;
+        drag.current = null;
+        endGesture();
       }}
     >
-      <Symbol kind={item.kind} w={def.w} d={def.d} stroke={stroke} fill={fill} thin={thin} />
+      {furnished ? (
+        <>
+          <ItemArt def={def} />
+          {/* the whole footprint takes the click, not just the parts */}
+          <Rect x={-def.w / 2} y={-def.d / 2} width={def.w} height={def.d} fill="transparent" />
+        </>
+      ) : isCustomKind(item.kind) ? (
+        <CustomSymbol def={def} missing={!custom} stroke={stroke} fill={fill} thin={thin} />
+      ) : (
+        <PlanSymbol kind={item.kind} w={def.w} d={def.d} stroke={stroke} fill={fill} thin={thin} />
+      )}
       {item.label && !ghost && (
         // Counter-rotate so annotations stay horizontal whatever the item's rotation.
         <Group rotation={(-item.rotation * 180) / Math.PI} listening={false}>
           <Text
             text={item.label}
             fontSize={11 / scale}
-            fontFamily="'IBM Plex Mono', monospace"
-            fill={ghost ? theme.accent : theme.ink}
+            fontFamily={theme.mono}
+            fill={theme.ink}
             width={4}
             offsetX={2}
             offsetY={5.5 / scale}
@@ -86,10 +156,126 @@ export function FurnitureShape({
       )}
     </Group>
   );
+});
+
+/**
+ * An item seen from above in its own colours: every visible part, softened to
+ * sit on the plan, with a hairline around it and one soft shadow under the
+ * whole piece. One canvas shape per item; the parts are worked out once per
+ * definition (`planShapes` caches), never on a mouse move.
+ */
+const ItemArt = memo(function ItemArt({ def }: { def: FurnitureDef }) {
+  const sceneFunc = useCallback(
+    (context: Konva.Context, shape: Konva.Shape) => {
+      const shapes = planShapes(def);
+      if (shapes.length === 0) return;
+      const ctx = context._context;
+      const zoom = Math.abs(shape.getAbsoluteScale().x) || 1; // px per meter
+      const k = zoom * context.canvas.getPixelRatio();
+      const alpha = ctx.globalAlpha;
+
+      // Taller pieces stand further off the floor; a rug barely lifts.
+      const lift = Math.min(1, Math.max(0.04, def.h / 0.9));
+      ctx.save();
+      traceShapes(ctx, shapes);
+      ctx.shadowColor = theme.itemShadow;
+      ctx.shadowBlur = (0.025 + 0.085 * lift) * k;
+      ctx.shadowOffsetX = (0.008 + 0.022 * lift) * k;
+      ctx.shadowOffsetY = (0.014 + 0.036 * lift) * k;
+      ctx.fillStyle = shapes[0].fill;
+      ctx.fill();
+      ctx.restore();
+
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = 0.8 / zoom;
+      for (const s of shapes) {
+        ctx.beginPath();
+        traceShape(ctx, s);
+        if (!s.hole) {
+          ctx.globalAlpha = alpha * s.opacity;
+          ctx.fillStyle = s.fill;
+          ctx.fill();
+          ctx.globalAlpha = alpha;
+        }
+        ctx.strokeStyle = s.edge;
+        ctx.stroke();
+      }
+    },
+    [def],
+  );
+  return <Shape sceneFunc={sceneFunc} listening={false} perfectDrawEnabled={false} />;
+});
+
+/**
+ * Plan symbol for an item defined in the plan itself: its footprint, and the
+ * outline of its parts seen from above, in the same linework as the catalog.
+ */
+function CustomSymbol({
+  def,
+  missing,
+  stroke,
+  fill,
+  thin,
+}: {
+  def: FurnitureDef;
+  /** the definition is gone — draw the crossed placeholder */
+  missing: boolean;
+  stroke: string;
+  fill: string;
+  thin: number;
+}) {
+  const hw = def.w / 2;
+  const hd = def.d / 2;
+  const shapes = missing ? [] : planShapes(def);
+  return (
+    <>
+      <Rect
+        x={-hw}
+        y={-hd}
+        width={def.w}
+        height={def.d}
+        stroke={stroke}
+        strokeWidth={thin}
+        dash={missing ? [thin * 4, thin * 3] : undefined}
+        fill={fill}
+      />
+      {missing && (
+        <>
+          <Line points={[-hw, -hd, hw, hd]} stroke={stroke} strokeWidth={thin / 1.5} listening={false} />
+          <Line points={[-hw, hd, hw, -hd]} stroke={stroke} strokeWidth={thin / 1.5} listening={false} />
+        </>
+      )}
+      {shapes.map((s, i) =>
+        s.kind === 'poly' ? (
+          <Line
+            key={i}
+            points={s.points}
+            closed
+            stroke={stroke}
+            strokeWidth={thin / 1.5}
+            lineJoin="round"
+            listening={false}
+          />
+        ) : (
+          <Ellipse
+            key={i}
+            x={s.x}
+            y={s.y}
+            radiusX={s.rx}
+            radiusY={s.ry}
+            rotation={s.rotation}
+            stroke={stroke}
+            strokeWidth={thin / 1.5}
+            listening={false}
+          />
+        ),
+      )}
+    </>
+  );
 }
 
 /** Kind-specific plan linework; local frame is meters, item center at 0,0, "front" toward +y. */
-function Symbol({
+function PlanSymbol({
   kind,
   w,
   d,

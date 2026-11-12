@@ -1,0 +1,29 @@
+/* The plan's look: room labels (name, size, area). Canvas colours live in
+   src/theme.ts; the label's base rules (.room-label, .room-name, .room-area)
+   are in index.css and refined here. Line heights match plan/labels.ts, which
+   decides how many lines fit. */
+
+.room-label {
+  gap: 0;
+  white-space: nowrap;
+}
+
+/* a name too long for its room is cut short rather than run into the walls */
+.room-label .room-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.25;
+}
+
+.room-label .room-dims,
+.room-label .room-area {
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 13px;
+  color: var(--ink-soft);
+}
+
+.room-label .room-area {
+  opacity: 0.72;
+}

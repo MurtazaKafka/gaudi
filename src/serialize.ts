@@ -1,29 +1,18 @@
-import { defaultSettings, usePlanStore } from './store';
-import { FURNITURE } from './catalog';
-import type { Furniture, Opening, PlanSettings, Point, Wall } from './types';
+import { applyPlanData, getPlanData, normalizePlan } from './plan';
+import type { PlanData } from './types';
 
-interface PlanFile {
+/** On-disk / on-the-wire shape. Version 1 files (no name, customItems, look) still load. */
+export interface PlanFile extends PlanData {
   app: 'gaudi';
-  version: 1;
-  walls: Wall[];
-  openings: Opening[];
-  furniture?: Furniture[];
-  roomNames: Record<string, string>;
-  settings: PlanSettings;
+  version: 2;
+}
+
+export function planToFile(plan: PlanData): PlanFile {
+  return { app: 'gaudi', version: 2, ...plan };
 }
 
 export function exportPlanJSON(): string {
-  const { walls, openings, furniture, roomNames, settings } = usePlanStore.getState();
-  const file: PlanFile = {
-    app: 'gaudi',
-    version: 1,
-    walls,
-    openings,
-    furniture,
-    roomNames,
-    settings,
-  };
-  return JSON.stringify(file, null, 2);
+  return JSON.stringify(planToFile(getPlanData()), null, 2);
 }
 
 export function downloadBlob(data: BlobPart, filename: string, type: string): void {
@@ -35,92 +24,30 @@ export function downloadBlob(data: BlobPart, filename: string, type: string): vo
   URL.revokeObjectURL(url);
 }
 
-function isPoint(p: unknown): p is Point {
-  return (
-    typeof p === 'object' &&
-    p !== null &&
-    Number.isFinite((p as Point).x) &&
-    Number.isFinite((p as Point).y)
-  );
-}
-
-/** Parse + validate a plan file; replaces the store on success. */
-export function importPlanJSON(text: string): { ok: true } | { ok: false; error: string } {
+/** Parse + validate a plan file. Touches nothing. */
+export function parsePlanJSON(text: string): { ok: true; plan: PlanData } | { ok: false; error: string } {
   let raw: unknown;
   try {
     raw = JSON.parse(text);
   } catch {
     return { ok: false, error: 'Not valid JSON.' };
   }
-  if (typeof raw !== 'object' || raw === null) return { ok: false, error: 'Not a plan file.' };
-  const f = raw as Partial<PlanFile>;
-  if (!Array.isArray(f.walls)) return { ok: false, error: 'Missing walls array.' };
+  return normalizePlan(raw);
+}
 
-  const walls: Wall[] = [];
-  for (const w of f.walls) {
-    if (!isPoint(w?.a) || !isPoint(w?.b)) return { ok: false, error: 'Malformed wall.' };
-    walls.push({
-      id: typeof w.id === 'string' ? w.id : crypto.randomUUID(),
-      a: { x: w.a.x, y: w.a.y },
-      b: { x: w.b.x, y: w.b.y },
-    });
-  }
-
-  const wallIds = new Set(walls.map((w) => w.id));
-  const openings: Opening[] = [];
-  for (const o of Array.isArray(f.openings) ? f.openings : []) {
-    if (
-      !wallIds.has(o?.wallId) ||
-      (o.type !== 'door' && o.type !== 'window') ||
-      !Number.isFinite(o.offset) ||
-      !Number.isFinite(o.width)
-    )
-      continue; // drop bad openings rather than failing the import
-    openings.push({
-      id: typeof o.id === 'string' ? o.id : crypto.randomUUID(),
-      wallId: o.wallId,
-      type: o.type,
-      offset: o.offset,
-      width: o.width,
-      ...(typeof o.label === 'string' ? { label: o.label } : {}),
-    });
-  }
-
-  const furniture: Furniture[] = [];
-  for (const fu of Array.isArray(f.furniture) ? f.furniture : []) {
-    if (
-      !(fu?.kind in FURNITURE) ||
-      !Number.isFinite(fu.x) ||
-      !Number.isFinite(fu.y) ||
-      !Number.isFinite(fu.rotation)
-    )
-      continue;
-    furniture.push({
-      id: typeof fu.id === 'string' ? fu.id : crypto.randomUUID(),
-      kind: fu.kind,
-      x: fu.x,
-      y: fu.y,
-      rotation: fu.rotation,
-      ...(typeof fu.label === 'string' ? { label: fu.label } : {}),
-    });
-  }
-
-  const s = f.settings;
-  const settings: PlanSettings = {
-    wallHeight: Number.isFinite(s?.wallHeight) ? s!.wallHeight : defaultSettings.wallHeight,
-    wallThickness: Number.isFinite(s?.wallThickness)
-      ? s!.wallThickness
-      : defaultSettings.wallThickness,
-    gridSize: Number.isFinite(s?.gridSize) ? s!.gridSize : defaultSettings.gridSize,
-  };
-
-  const roomNames: Record<string, string> = {};
-  if (typeof f.roomNames === 'object' && f.roomNames !== null) {
-    for (const [k, v] of Object.entries(f.roomNames)) {
-      if (typeof v === 'string') roomNames[k] = v;
-    }
-  }
-
-  usePlanStore.setState({ walls, openings, furniture, roomNames, settings });
+/**
+ * Parse + validate a plan file; replaces the plan on the canvas on success —
+ * the current project's content. To open a file as a document of its own,
+ * use `openPlanFile` (projects/projectStore.ts).
+ * `history`: 'push' makes the import undoable (default), 'reset' starts a
+ * fresh history (a different document), 'skip' records nothing.
+ */
+export function importPlanJSON(
+  text: string,
+  history: 'push' | 'reset' | 'skip' = 'push',
+): { ok: true } | { ok: false; error: string } {
+  const result = parsePlanJSON(text);
+  if (!result.ok) return result;
+  applyPlanData(result.plan, history);
   return { ok: true };
 }

@@ -1,0 +1,39 @@
+/* Model view, round two. Loaded after scene.css. */
+
+/*
+ * The control strip. The kit centers a bottom bar with left: 50% + translate,
+ * which caps its shrink-to-fit width at half the view — so it wrapped long
+ * before it ran out of room. Pin it to both sides and center with margins
+ * instead: one row whenever the row fits, a tidy centered wrap when not.
+ */
+.scene-bar.float-bar.bottom {
+  left: 12px;
+  right: 12px;
+  width: fit-content;
+  max-width: calc(100% - 24px);
+  margin-inline: auto;
+  transform: none;
+  gap: 6px 8px;
+}
+
+.scene-bar > * {
+  flex-shrink: 0;
+}
+
+/* Narrow windows: the strip wraps, so the dividers would strand at row ends. */
+@media (max-width: 1100px) {
+  .scene-bar .float-rule {
+    display: none;
+  }
+
+  .scene-bar.float-bar.bottom {
+    gap: 6px 12px;
+  }
+}
+
+/* Keep the walk hint clear of a strip that has wrapped onto two rows. */
+@media (max-width: 860px) {
+  .scene-hint {
+    bottom: 100px;
+  }
+}

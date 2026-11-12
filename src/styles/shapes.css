@@ -1,0 +1,42 @@
+/* Footprints in the Generate panel: the shape picker, the outline read-out,
+   the list of rooms to keep. Built on the kit (kit.css). */
+
+/* Six to a row: the eleven presets, plus the person's own outline when there is one. */
+.shape-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 28px);
+  justify-content: space-between;
+  row-gap: 4px;
+}
+
+/* What is picked, and the one thing you can do with it. */
+.shape-picked {
+  min-width: 0;
+  font-size: 11px;
+  color: var(--ink-soft);
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shape-dims {
+  font-size: 11px;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+/* Rooms of the current plan that a re-plan leaves alone. */
+.shape-keep {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.shape-keep .chip {
+  padding: 3px 8px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

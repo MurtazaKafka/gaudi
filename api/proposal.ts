@@ -1,8 +1,6 @@
 /** GET /api/proposal?id=&pid= — one proposal, including its full plan. */
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getJson, listPaths, preflight, validId } from './_lib.js';
-
-const PID_RE = /^[A-Za-z0-9-]{6,40}$/;
+import { getJson, listPaths, PID_RE, preflight, validId } from './_lib.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!preflight(req, res, 'GET')) return;

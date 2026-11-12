@@ -1,29 +1,44 @@
-/** GET /api/shared?id= — the shared doc: current plan, comments, proposal list. */
+/**
+ * GET /api/shared?id= — the shared doc: current plan, comments, proposal list.
+ * Asked for by a view-only link's id: the plan and nothing else.
+ */
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getJson, latestRevision, listPaths, preflight, readMeta, validId } from './_lib.js';
+import { findShare, getJson, latestRevision, listPaths, pidOf, preflight, validId, type BlobRef } from './_lib.js';
 
 interface StoredComment {
   author: string;
   text: string;
   at: string;
 }
-interface StoredProposal {
+interface StoredSummary {
   author: string;
   note: string;
-  plan: { furniture?: unknown[] };
   at: string;
+  items?: number;
+  /** Only on proposals stored before summaries existed. */
+  plan?: { furniture?: unknown[] };
 }
+interface StoredStatus {
+  status: string;
+  note?: string;
+}
+
+const STATUSES = new Set(['accepted', 'dismissed', 'changes']);
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!preflight(req, res, 'GET')) return;
-  const id = req.query.id;
-  if (!validId(id)) return res.status(400).json({ error: 'bad id' });
+  if (!validId(req.query.id)) return res.status(400).json({ error: 'bad id' });
 
-  const meta = await readMeta(id);
-  if (!meta) return res.status(404).json({ error: 'not found' });
+  const share = await findShare(req.query.id);
+  if (!share) return res.status(404).json({ error: 'not found' });
+  const { id } = share;
 
   const rev = await latestRevision(id);
   if (!rev) return res.status(404).json({ error: 'not found' });
+
+  if (share.viewOnly) {
+    return res.status(200).json({ plan: rev.plan, updatedAt: rev.at, comments: [], proposals: [], view: true });
+  }
 
   const commentRefs = await listPaths(`share/${id}/comment/`);
   const comments = (
@@ -31,27 +46,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   ).filter((c): c is StoredComment => c !== null);
 
   const statusRefs = await listPaths(`share/${id}/status/`);
-  const statuses = new Map<string, string>();
-  for (const ref of statusRefs) {
-    const pid = ref.pathname.split('/').pop()!.replace('.json', '');
-    const s = await getJson<{ status: string }>(ref);
-    if (s) statuses.set(pid, s.status);
-  }
+  const statuses = new Map<string, StoredStatus>();
+  await Promise.all(
+    statusRefs.map(async (ref) => {
+      const s = await getJson<StoredStatus>(ref);
+      if (s && STATUSES.has(s.status)) statuses.set(pidOf(ref.pathname), s);
+    }),
+  );
 
-  const proposalRefs = await listPaths(`share/${id}/proposal/`);
+  // Proposals carry whole plans; the list is built from their small summaries — which also
+  // outlive the plan of a proposal that has been accepted or dismissed.
+  const sources = new Map<string, BlobRef>();
+  for (const r of await listPaths(`share/${id}/proposal/`)) sources.set(pidOf(r.pathname), r);
+  for (const r of await listPaths(`share/${id}/summary/`)) sources.set(pidOf(r.pathname), r);
   const proposals = (
     await Promise.all(
-      proposalRefs.map(async (ref) => {
-        const pid = ref.pathname.split('/').pop()!.replace('.json', '');
-        const p = await getJson<StoredProposal>(ref);
+      [...sources].sort(([a], [b]) => a.localeCompare(b)).map(async ([pid, ref]) => {
+        const p = await getJson<StoredSummary>(ref);
         if (!p) return null;
+        const st = statuses.get(pid);
         return {
           pid,
           author: p.author,
           note: p.note,
           at: p.at,
-          items: Array.isArray(p.plan?.furniture) ? p.plan.furniture.length : 0,
-          status: statuses.get(pid) ?? 'open',
+          items:
+            typeof p.items === 'number'
+              ? p.items
+              : Array.isArray(p.plan?.furniture)
+                ? p.plan.furniture.length
+                : 0,
+          status: st?.status ?? 'open',
+          ...(st?.status === 'changes' && st.note ? { reviewNote: st.note } : {}),
         };
       }),
     )

@@ -1,189 +1,149 @@
-import Anthropic from '@anthropic-ai/sdk';
-import { FURNITURE, FURNITURE_KINDS, furnitureDef, type FurnitureKind } from './catalog';
-import type { DetectedRoom } from './rooms';
-import { usePlanStore } from './store';
-import { getApiKey } from './aiStore';
+/**
+ * Furnish one room with Claude: ask → ghost preview → accept / retry / discard.
+ *
+ * One run at a time. Each run has its own AbortController and run id; a reply
+ * that does not belong to the current run is ignored, and the whole state is
+ * dropped when the plan under it changes hands (shared view, preview, import)
+ * or the room goes away.
+ */
+import { aiErrorMessage, askJson, ensureApiKey, isAbort } from './ai/client';
 import {
-  dist,
-  distToSegment,
-  pointInPolygon,
-  quadsOverlap,
-  rectCorners,
-} from './geometry';
-import type { Furniture, Point } from './types';
+  FURNISH_SYSTEM,
+  buildFurnishPrompt,
+  furnishSchema,
+  planKinds,
+  validatePlacements,
+  type FurnishContext,
+  type FurnishResult,
+  type RawPlacement,
+} from './ai/furnishCore';
+import { analyzeRooms, furnitureInRoom } from './ai/planGeom';
+import { useAiStore } from './aiStore';
+import { transact, undo } from './history';
+import { getPlanData } from './plan';
+import { detectRooms } from './rooms';
+import { usePlanStore } from './store';
+import { toast } from './toast';
+import { useUiStore } from './uiStore';
+import type { PlanData } from './types';
 
-export interface SuggestResult {
-  items: Omit<Furniture, 'id'>[];
-  /** how many model suggestions failed geometry validation and were dropped */
-  dropped: number;
-}
+export type SuggestResult = FurnishResult;
 
-interface RawPlacement {
-  kind: string;
-  x: number;
-  y: number;
-  rotation_deg: number;
-  reason: string;
-}
-
-const RESPONSE_SCHEMA = {
-  type: 'object',
-  properties: {
-    items: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          kind: { type: 'string', enum: FURNITURE_KINDS },
-          x: { type: 'number' },
-          y: { type: 'number' },
-          rotation_deg: { type: 'number' },
-          reason: { type: 'string' },
-        },
-        required: ['kind', 'x', 'y', 'rotation_deg', 'reason'],
-        additionalProperties: false,
-      },
-    },
-  },
-  required: ['items'],
-  additionalProperties: false,
-} as const;
-
-function buildPrompt(room: DetectedRoom, roomName: string | undefined): string {
-  const { walls, openings, furniture } = usePlanStore.getState();
-
-  const poly = room.polygon.map((p) => `(${p.x.toFixed(2)}, ${p.y.toFixed(2)})`).join(', ');
-
-  // Openings whose center lies on this room's boundary.
-  const boundaryOpenings = openings.flatMap((o) => {
-    const wall = walls.find((w) => w.id === o.wallId);
-    if (!wall) return [];
-    const len = dist(wall.a, wall.b);
-    if (len < 1e-6) return [];
-    const t = o.offset / len;
-    const c: Point = {
-      x: wall.a.x + (wall.b.x - wall.a.x) * t,
-      y: wall.a.y + (wall.b.y - wall.a.y) * t,
-    };
-    const onBoundary = room.polygon.some((p, i) =>
-      distToSegment(c, p, room.polygon[(i + 1) % room.polygon.length]) < 0.15,
-    );
-    if (!onBoundary) return [];
-    return [`${o.type} at (${c.x.toFixed(2)}, ${c.y.toFixed(2)}), ${o.width} m wide`];
+/** One Claude call for one room. Throws AiError on failure / abort. */
+export async function suggestFurniture(ctx: FurnishContext, signal?: AbortSignal): Promise<FurnishResult> {
+  const reply = await askJson<{ items: RawPlacement[] }>({
+    tag: 'furnish',
+    system: FURNISH_SYSTEM,
+    prompt: buildFurnishPrompt(ctx),
+    schema: furnishSchema(planKinds(ctx.plan)),
+    maxTokens: 16000,
+    effort: 'medium',
+    signal,
   });
-
-  const existing = furniture
-    .filter((f) => pointInPolygon({ x: f.x, y: f.y }, room.polygon))
-    .map((f) => {
-      const def = furnitureDef(f.kind);
-      return `${f.kind} at (${f.x}, ${f.y}), rotation ${Math.round((f.rotation * 180) / Math.PI)}°, footprint ${def.w}×${def.d} m`;
-    });
-
-  const catalog = FURNITURE_KINDS.map((k) => {
-    const d = FURNITURE[k];
-    return `${k}: ${d.label}, ${d.w}×${d.d} m`;
-  }).join('\n');
-
-  return `Furnish one room of a house floor plan.
-
-Coordinate system: meters; +x is east, +y is south (screen-down). Furniture rotation is in degrees, clockwise. At rotation 0 an item's width (first footprint dimension) runs east-west and its "front" faces south; the back faces north. A bed's headboard, a sofa's backrest, and a wardrobe's back are on the north side at rotation 0 — so to put a sofa's back against the east wall, rotate it 90°.
-
-ROOM
-Name: ${roomName ?? 'unnamed room'}
-Boundary polygon (closed): ${poly}
-Area: ${room.area.toFixed(1)} m²
-Openings on this room's walls:
-${boundaryOpenings.length ? boundaryOpenings.map((s) => `- ${s}`).join('\n') : '- none recorded'}
-Existing furniture already placed in this room (do not overlap it, do not duplicate its role):
-${existing.length ? existing.map((s) => `- ${s}`).join('\n') : '- none'}
-
-CATALOG (kind: label, width×depth)
-${catalog}
-
-RULES
-- Every item must sit fully inside the boundary polygon, including its rotated footprint corners. Keep at least 0.05 m from walls unless intentionally flush against one.
-- Keep door areas clear: leave a swing/walk zone of about the door's width in front of every door. Never block a door.
-- Items must not overlap each other or existing furniture (rugs are the exception: other items may sit on a rug).
-- Leave practical walking clearance (~0.6 m) along the main paths between the door(s) and the key pieces.
-- Furnish appropriately for the room's name and size — a realistic, tasteful, uncluttered layout. Prefer fewer well-placed pieces over cramming. Typical counts: 3-7 items.
-- Place items against walls when that is the natural position (beds, wardrobes, sofas, desks, counters, toilets).
-- Use only catalog kinds. x and y are the item's center.
-
-Return the layout as JSON.`;
+  return validatePlacements(reply && typeof reply === 'object' ? reply.items : null, ctx);
 }
 
-/** Drop suggestions that violate geometry: outside the room or overlapping. */
-function validate(
-  raw: RawPlacement[],
-  room: DetectedRoom,
-): SuggestResult {
-  const { furniture } = usePlanStore.getState();
-  const placedQuads: Point[][] = furniture
-    .filter((f) => pointInPolygon({ x: f.x, y: f.y }, room.polygon))
-    .map((f) => {
-      const def = furnitureDef(f.kind);
-      return rectCorners(f.x, f.y, def.w, def.d, f.rotation);
-    });
+/** Build the furnishing context for a room of `plan`, or null if the room is not there. */
+export function furnishContext(
+  plan: PlanData,
+  roomKey: string,
+  opts: { note?: string; replace?: boolean; nameHint?: string } = {},
+): FurnishContext | null {
+  const rooms = analyzeRooms(plan.walls, plan.roomNames);
+  const room = rooms.find((r) => r.room.key === roomKey);
+  return room ? { plan, rooms, room, ...opts } : null;
+}
 
-  const accepted: Omit<Furniture, 'id'>[] = [];
-  let dropped = 0;
+let controller: AbortController | null = null;
 
-  for (const r of raw) {
-    if (!(r.kind in FURNITURE)) {
-      dropped++;
-      continue;
-    }
-    const kind = r.kind as FurnitureKind;
-    const def = furnitureDef(kind);
-    const rot = (r.rotation_deg * Math.PI) / 180;
-    const corners = rectCorners(r.x, r.y, def.w, def.d, rot);
+/** Stop whatever is running and forget any suggestion on screen. */
+export function cancelFurnish(): void {
+  controller?.abort();
+  controller = null;
+  if (useAiStore.getState().status !== 'idle') useAiStore.getState().clear();
+}
 
-    const inside =
-      pointInPolygon({ x: r.x, y: r.y }, room.polygon) &&
-      corners.every((c) => pointInPolygon(c, room.polygon));
-    if (!inside) {
-      dropped++;
-      continue;
-    }
+/**
+ * Suggest furniture for a room and show it as ghosts. `replace` furnishes the
+ * room from scratch; accepting then swaps out what is there.
+ */
+export async function runFurnish(roomKey: string, opts: { replace?: boolean } = {}): Promise<void> {
+  if (useUiStore.getState().readOnly) return;
+  if (!(await ensureApiKey())) return;
+  if (useUiStore.getState().readOnly) return;
 
-    // Rugs may overlap; everything else must not.
-    const overlaps =
-      kind !== 'rug' &&
-      placedQuads.some((q) => quadsOverlap(corners, q));
-    if (overlaps) {
-      dropped++;
-      continue;
-    }
+  controller?.abort();
+  const mine = new AbortController();
+  controller = mine;
 
-    if (kind !== 'rug') placedQuads.push(corners);
-    accepted.push({ kind, x: r.x, y: r.y, rotation: rot });
+  const ai = useAiStore.getState();
+  const ctx = furnishContext(getPlanData(), roomKey, { note: ai.note, replace: !!opts.replace });
+  if (!ctx) {
+    cancelFurnish();
+    return;
   }
-
-  return { items: accepted, dropped };
+  const runId = ai.start(roomKey, !!opts.replace);
+  try {
+    const result = await suggestFurniture(ctx, mine.signal);
+    if (mine.signal.aborted) return;
+    if (result.items.length === 0) {
+      useAiStore
+        .getState()
+        .fail(
+          runId,
+          result.dropped > 0
+            ? 'Nothing proposed fits this room — try again.'
+            : 'Nothing to add here.',
+        );
+    } else {
+      useAiStore.getState().succeed(runId, result.items, result.dropped);
+    }
+  } catch (e) {
+    if (isAbort(e) || mine.signal.aborted) return;
+    useAiStore.getState().fail(runId, aiErrorMessage(e));
+  } finally {
+    if (controller === mine) controller = null;
+  }
 }
 
-export async function suggestFurniture(
-  room: DetectedRoom,
-  roomName: string | undefined,
-): Promise<SuggestResult> {
-  const apiKey = getApiKey();
-  if (!apiKey) throw new Error('No API key set.');
+/** Put the previewed suggestion into the plan — one undo step, even when it replaces furniture. */
+export function acceptFurnish(): void {
+  const ai = useAiStore.getState();
+  if (ai.status !== 'preview' || !ai.roomKey) return;
+  if (useUiStore.getState().readOnly) {
+    cancelFurnish();
+    return;
+  }
+  const plan = getPlanData();
+  const room = detectRooms(plan.walls).find((r) => r.key === ai.roomKey);
+  const items = ai.items;
+  const replace = ai.replace;
+  cancelFurnish();
+  if (!room || items.length === 0) return;
 
-  const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
-
-  const response = await client.messages.create({
-    model: 'claude-opus-4-8',
-    max_tokens: 16000,
-    thinking: { type: 'adaptive' },
-    output_config: {
-      format: { type: 'json_schema', schema: RESPONSE_SCHEMA },
-    },
-    messages: [{ role: 'user', content: buildPrompt(room, roomName) }],
+  transact(() => {
+    const store = usePlanStore.getState();
+    if (replace) {
+      const old = furnitureInRoom(plan.furniture, room).map((f) => f.id);
+      if (old.length) store.deleteFurniture(old);
+    }
+    store.addFurnitureBatch(items);
   });
-
-  const text = response.content.find((b) => b.type === 'text');
-  if (!text || text.type !== 'text') throw new Error('Empty model response.');
-
-  const parsed = JSON.parse(text.text) as { items: RawPlacement[] };
-  return validate(parsed.items ?? [], room);
+  useUiStore.getState().setRoomSelection(null);
+  toast(`${items.length} piece${items.length === 1 ? '' : 's'} added.`, { action: { label: 'Undo', run: () => void (!useUiStore.getState().readOnly && undo()) } });
 }
+
+// A suggestion only makes sense on the plan it was made for.
+usePlanStore.subscribe((s, prev) => {
+  const ai = useAiStore.getState();
+  if (ai.status === 'idle') return;
+  const swapped =
+    s.walls !== prev.walls && s.openings !== prev.openings && s.furniture !== prev.furniture && s.settings !== prev.settings;
+  if (swapped || (s.walls !== prev.walls && !detectRooms(s.walls).some((r) => r.key === ai.roomKey))) {
+    cancelFurnish();
+  }
+});
+useUiStore.subscribe((s, prev) => {
+  // The room panel (accept / discard) only exists under the select tool: no orphan ghosts.
+  if ((s.readOnly && !prev.readOnly) || (s.tool !== prev.tool && s.tool !== 'select')) cancelFurnish();
+});

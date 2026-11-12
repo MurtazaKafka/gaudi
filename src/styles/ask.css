@@ -1,0 +1,162 @@
+/* Ask Gaudí — the ⌘K command bar, and the small additions the room panel needs.
+   Built on kit.css; only what the kit does not have lives here. */
+
+/* ---------- command bar ---------- */
+
+.ask-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 14vh;
+  background: rgba(33, 31, 27, 0.1);
+}
+
+.ask {
+  width: min(560px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 14px 48px rgba(33, 31, 27, 0.2);
+  overflow: hidden;
+}
+
+.ask-field {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 12px;
+}
+
+.ask-glyph {
+  flex-shrink: 0;
+  width: 14px;
+  font-size: 13px;
+  line-height: 1;
+  text-align: center;
+  color: var(--accent);
+}
+
+.ask-context {
+  flex-shrink: 0;
+  max-width: 44%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.ask-context .mono {
+  font-size: 10px;
+  opacity: 0.8;
+}
+
+.ask-input {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 0;
+  font-family: var(--sans);
+  font-size: 14px;
+  color: var(--ink);
+  background: transparent;
+  border: none;
+  outline: none;
+}
+
+.ask-input::placeholder {
+  color: #a8a396;
+}
+
+.ask-input:read-only {
+  color: var(--ink-soft);
+}
+
+.ask-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--line);
+}
+
+.ask-status .hint {
+  flex: 1;
+  min-width: 0;
+}
+
+.ask-list {
+  display: flex;
+  flex-direction: column;
+  max-height: min(46vh, 340px);
+  padding: 5px;
+  overflow-y: auto;
+  border-top: 1px solid var(--line);
+}
+
+/* rows are kit .menu-item; this only adds the keyboard cursor */
+.ask-list .menu-item.cursor {
+  background: var(--paper);
+}
+
+.ask-list .menu-item:hover:not(.cursor) {
+  background: transparent;
+}
+
+.ask-row-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ask-row-label em {
+  font-style: normal;
+  color: var(--ink-soft);
+}
+
+.ask-row-send {
+  color: var(--accent);
+}
+
+.ask-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--paper);
+}
+
+.ask-foot span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--ink-soft);
+}
+
+/* ---------- room panel additions ---------- */
+
+.rap-area {
+  margin-left: 4px;
+  font-family: var(--mono);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink-soft);
+}
+
+.rap-grow {
+  flex: 1;
+}
+
+.room-ai-panel .rap-note {
+  padding: 5px 7px;
+  font-family: var(--sans);
+  font-size: 11px;
+}

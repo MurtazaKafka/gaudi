@@ -1,4 +1,5 @@
 import { useUiStore } from '../uiStore';
+import { redo, undo, useHistoryStore } from '../history';
 import type { Tool } from '../types';
 
 const tools: { id: Tool; label: string; hint: string; icon: React.ReactNode }[] = [
@@ -51,9 +52,22 @@ const tools: { id: Tool; label: string; hint: string; icon: React.ReactNode }[] 
       </svg>
     ),
   },
+  {
+    id: 'measure',
+    label: 'Measure',
+    hint: 'M',
+    icon: (
+      <svg width="17" height="17" viewBox="0 0 16 16" fill="none">
+        <path d="M2.2 10.6l8.4-8.4 3.2 3.2-8.4 8.4-3.2-3.2z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+        <path d="M5 7.8l1.4 1.4M7 5.8l1.4 1.4M9 3.8l1.4 1.4" stroke="currentColor" strokeWidth="1.1" />
+      </svg>
+    ),
+  },
 ];
 
 export function Toolbar() {
+  const canUndo = useHistoryStore((s) => s.canUndo);
+  const canRedo = useHistoryStore((s) => s.canRedo);
   const tool = useUiStore((s) => s.tool);
   const setTool = useUiStore((s) => s.setTool);
   const paletteOpen = useUiStore((s) => s.paletteOpen);
@@ -88,6 +102,19 @@ export function Toolbar() {
           <path d="M4 7V4.5A1.5 1.5 0 0 1 5.5 3h5A1.5 1.5 0 0 1 12 4.5V7" stroke="currentColor" strokeWidth="1.4" />
         </svg>
         <span className="tool-hint">F</span>
+      </button>
+      <span style={{ flex: 1 }} />
+      <button className="tool-btn" title="Undo — ⌘Z" aria-label="Undo" disabled={!canUndo} onClick={() => undo()}>
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M5.5 3.5L2.5 6.5l3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M3 6.5h6.2a3.3 3.3 0 0 1 0 6.6H6.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        </svg>
+      </button>
+      <button className="tool-btn" title="Redo — ⇧⌘Z" aria-label="Redo" disabled={!canRedo} onClick={() => redo()}>
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M10.5 3.5l3 3-3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M13 6.5H6.8a3.3 3.3 0 0 0 0 6.6h2.7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        </svg>
       </button>
     </nav>
   );

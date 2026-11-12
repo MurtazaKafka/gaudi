@@ -5,16 +5,37 @@
  * by the item's plan transform. No mesh assets; everything stays maquette.
  */
 
+export type PartShape = 'box' | 'rbox' | 'cylinder' | 'cone' | 'sphere' | 'torus';
+
+/**
+ * One primitive of a furniture model, in the item's local frame (meters):
+ * x right, y up from the floor, z toward the item's front. (x, y, z) is the
+ * part's CENTER.
+ *
+ *   box / rbox  w × h × d              (rbox adds `bevel`, a corner radius)
+ *   cylinder    r, h; optional r2 = top radius for a taper (axis along y)
+ *   cone        r (base), h            (axis along y, apex up)
+ *   sphere      r; or w/h/d as ellipsoid diameters
+ *   torus       r (ring radius), r2 (tube radius); lies flat, axis along y
+ */
 export interface Part {
-  shape: 'box' | 'cylinder' | 'sphere';
+  shape: PartShape;
   x: number;
   y: number;
   z: number;
   /** box dims */ w?: number;
   d?: number;
-  /** box/cylinder height */ h?: number;
-  /** cylinder/sphere radius */ r?: number;
+  /** box/cylinder/cone height */ h?: number;
+  /** cylinder/cone/sphere/torus radius */ r?: number;
+  /** cylinder top radius, or torus tube radius */ r2?: number;
+  /** rbox corner radius */ bevel?: number;
+  /** Euler rotation in degrees, applied X then Y then Z about the part center. */
+  rot?: [number, number, number];
   color: string;
+  /** 0..1, default 0.9 (matte) */ rough?: number;
+  /** 0..1, default 0 */ metal?: number;
+  /** emissive strength 0..2 — lamps, screens */ glow?: number;
+  /** 0..1 — glass */ opacity?: number;
 }
 
 export interface FurnitureDef {
@@ -324,10 +345,45 @@ export const FURNITURE = {
   },
 } as const satisfies Record<string, FurnitureDef>;
 
-export type FurnitureKind = keyof typeof FURNITURE;
+export type BuiltinKind = keyof typeof FURNITURE;
+/** A plan-local item (e.g. modelled from a product link): `custom:{id}` → plan.customItems[id]. */
+export type CustomKind = `custom:${string}`;
+export type FurnitureKind = BuiltinKind | CustomKind;
 
-export const FURNITURE_KINDS = Object.keys(FURNITURE) as FurnitureKind[];
+export const FURNITURE_KINDS = Object.keys(FURNITURE) as BuiltinKind[];
+
+export const isBuiltinKind = (k: unknown): k is BuiltinKind =>
+  typeof k === 'string' && Object.hasOwn(FURNITURE, k);
+export const isCustomKind = (k: unknown): k is CustomKind =>
+  typeof k === 'string' && k.startsWith('custom:') && k.length > 7;
+export const customKind = (id: string): CustomKind => `custom:${id}`;
+export const customId = (kind: CustomKind): string => kind.slice(7);
+
+/**
+ * Custom definitions live in the plan (store.customItems); the store mirrors
+ * them here so every `furnitureDef(kind)` call site resolves both sources.
+ */
+let customDefs: Record<string, FurnitureDef> = {};
+export function setCustomDefs(defs: Record<string, FurnitureDef>): void {
+  customDefs = defs;
+}
+
+/** Stand-in for a custom kind whose definition is gone (deleted, or a partial import). */
+const MISSING: FurnitureDef = {
+  label: 'Missing item',
+  w: 0.6,
+  d: 0.6,
+  h: 0.6,
+  parts: [box(0, 0.3, 0, 0.6, 0.6, 0.6, '#cfc8b8')],
+};
 
 export function furnitureDef(kind: FurnitureKind): FurnitureDef {
-  return FURNITURE[kind];
+  if (isBuiltinKind(kind)) return FURNITURE[kind];
+  const id = customId(kind);
+  return Object.hasOwn(customDefs, id) ? customDefs[id] : MISSING;
+}
+
+/** True when `kind` resolves to a real definition (builtin, or a custom item present in the plan). */
+export function kindExists(kind: unknown): kind is FurnitureKind {
+  return isBuiltinKind(kind) || (isCustomKind(kind) && Object.hasOwn(customDefs, customId(kind)));
 }

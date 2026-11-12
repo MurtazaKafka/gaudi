@@ -15,5 +15,5 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true
   },
-  "include": ["api"]
+  "include": ["api", "src/products/extract.ts", "src/products/netGuard.ts"]
 }

@@ -1,5 +1,5 @@
 /**
- * Local harness for the /api share functions — no Vercel account needed.
+ * Local harness for the /api functions (share, product) — no Vercel account needed.
  * Bundles the handlers with esbuild (already present via Vite), serves them
  * on :5177, and stores blobs in .share-dev-store/ on disk.
  *
@@ -14,7 +14,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, '..');
 const outDir = join(root, '.share-dev-build');
 const PORT = 5177;
-const NAMES = ['share', 'shared', 'comment', 'propose', 'proposal', 'resolve'];
+/** Plans are capped at 400 KB by the handlers; nothing legitimate is bigger than this. */
+const MAX_BODY = 1024 * 1024;
+const NAMES = ['share', 'shared', 'comment', 'propose', 'proposal', 'resolve', 'product'];
 
 // Bundle handlers (resolves ./_lib.js → _lib.ts the same way Vercel's builder does)
 const esbuild = join(root, 'node_modules', '.bin', 'esbuild');
@@ -64,7 +66,15 @@ createServer(async (req, res) => {
     return res.end('not found');
   }
   const chunks = [];
-  for await (const c of req) chunks.push(c);
+  let size = 0;
+  for await (const c of req) {
+    size += c.length;
+    if (size > MAX_BODY) {
+      res.statusCode = 413;
+      return res.end(JSON.stringify({ error: 'too large' }));
+    }
+    chunks.push(c);
+  }
   let body;
   if (chunks.length) {
     try {
@@ -83,4 +93,4 @@ createServer(async (req, res) => {
       res.end(JSON.stringify({ error: 'internal' }));
     }
   }
-}).listen(PORT, () => console.log(`share-dev api on http://localhost:${PORT}`));
+}).listen(PORT, '127.0.0.1', () => console.log(`share-dev api on http://localhost:${PORT}`));
