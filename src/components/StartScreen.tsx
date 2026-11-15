@@ -11,7 +11,6 @@ import { formatArea, useUnits } from '../units';
 import { MAX_BATHROOMS, MAX_BEDROOMS, SHAPES, SPACES } from '../generate/brief';
 import { applyBriefText, drawOutline, generate, setBrief, useGenerateStore } from '../generate/run';
 import { createFromTemplate } from '../projects/projectStore';
-import { startDemo } from '../demo/tour';
 import { buildTemplate, TEMPLATES, type Template } from '../projects/templates';
 import { measurePlan } from '../projects/library';
 import type { PlanData } from '../types';
@@ -79,12 +78,6 @@ export function StartScreen({ onDismiss }: { onDismiss: () => void }) {
         <div>
           <div className="st-title">Design a house</div>
           <div className="hint">Pick what you need — Gaudí draws five layouts to compare, then builds the one you choose in 3D.</div>
-          <button className="st-demo" onClick={startDemo}>
-            <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-              <path d="M2 1l7 4-7 4z" fill="currentColor" />
-            </svg>
-            Watch the one-minute demo
-          </button>
         </div>
         <button className="icon-btn" title="Start from a blank canvas" aria-label="Close" onClick={onDismiss}>
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none">

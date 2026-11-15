@@ -48,7 +48,6 @@ import { RenderOverlay } from '../three/render/RenderOverlay';
 import { useRenderStore } from '../three/render/renderStore';
 import { effectiveRoof, STYLES, styleById } from '../three/styles';
 import { LAMP_DISTANCE, sunState, mixHex, sunPhase } from '../three/sun';
-import { sceneHandle } from '../three/sceneHandles';
 import { useViewStore } from '../three/viewStore';
 import type { CameraPose } from '../three/viewStore';
 import {
@@ -782,21 +781,6 @@ function SceneBridge() {
     gl.domElement.addEventListener('webglcontextrestored', redraw);
     return () => gl.domElement.removeEventListener('webglcontextrestored', redraw);
   }, [get]);
-
-  // The camera, for the demo tour to move.
-  useEffect(() => {
-    const { camera, scene, invalidate } = get();
-    const handle = {
-      camera,
-      controls: controls as unknown as OrbitLike | null,
-      lit: () => scene.environment !== null,
-      invalidate: () => invalidate(),
-    };
-    sceneHandle.current = handle;
-    return () => {
-      if (sceneHandle.current === handle) sceneHandle.current = null;
-    };
-  }, [get, controls]);
 
   // Dev-only: camera, renderer and controls for the demo recorder and tests.
   useEffect(() => {
