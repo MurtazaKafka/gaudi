@@ -49,6 +49,33 @@
   color: var(--ink-soft);
 }
 
+.demo-wait {
+  width: 120px;
+  height: 2px;
+  margin-top: 6px;
+  overflow: hidden;
+  background: var(--line);
+  border-radius: 999px;
+}
+
+.demo-wait span {
+  display: block;
+  width: 40%;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  animation: demo-wait 1.4s ease-in-out infinite;
+}
+
+@keyframes demo-wait {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+
 /* ---------- step captions ---------- */
 
 .demo-caption {
@@ -179,7 +206,8 @@
 @media (prefers-reduced-motion: reduce) {
   .demo-title,
   .demo-caption,
-  .demo-veil {
+  .demo-veil,
+  .demo-wait span {
     animation: none;
   }
 }

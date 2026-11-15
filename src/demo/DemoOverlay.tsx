@@ -52,6 +52,10 @@ export function DemoOverlay() {
           <div className="demo-word">Gaudí</div>
           <div className="demo-line">From a sentence to a house you can walk through.</div>
           <div className="demo-foot mono">a one-minute tour · esc to skip</div>
+          {/* On a first visit the 3D materials are still arriving: show that something is happening. */}
+          <div className="demo-wait" aria-hidden="true">
+            <span />
+          </div>
         </div>
       )}
 
