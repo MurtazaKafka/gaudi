@@ -1,0 +1,37 @@
+/* Render mode controls over the 3D view. */
+
+.render-bar {
+  z-index: 7;
+  gap: 12px;
+}
+
+.render-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+
+.render-track {
+  position: relative;
+  width: 140px;
+  height: 3px;
+  overflow: hidden;
+  background: var(--line);
+  border-radius: 999px;
+}
+
+.render-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--accent);
+  transition: width 200ms linear;
+}
+
+.render-pct {
+  min-width: 34px;
+  font-size: 11px;
+  color: var(--ink-soft);
+  text-align: right;
+}

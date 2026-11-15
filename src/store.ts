@@ -20,6 +20,8 @@ export const DEFAULT_OPENING_WIDTH: Record<OpeningType, number> = {
   window: 1.2,
 };
 
+export { DOUBLE_DOOR_MIN, OPENING_STEPS, TRIPLE_WINDOW_MIN } from './openingSizes';
+
 /** Margin kept between openings and wall ends / each other. */
 const OPENING_GAP = 0.05;
 

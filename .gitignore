@@ -26,3 +26,8 @@ dist-ssr
 .share-dev-store
 .env.local
 .share-dev-build
+
+# Secrets (HF_TOKEN, FAL_KEY, …) — never commit
+.env
+.env.*
+!.env.example

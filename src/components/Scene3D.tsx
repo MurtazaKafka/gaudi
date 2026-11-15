@@ -15,9 +15,11 @@ import { detectRooms } from '../rooms';
 import type { DetectedRoom } from '../rooms';
 import { downloadBlob } from '../serialize';
 import { toast, toastError } from '../toast';
-import type { PlanSettings, RoofKind, Wall } from '../types';
+import type { PlanSettings, Point, RoofKind, Wall } from '../types';
 import {
   buildCeilings,
+  buildRoomLamps,
+  lampsOn,
   buildFloors,
   buildFurniture,
   buildOpenings,
@@ -34,8 +36,19 @@ import { buildRoof } from '../three/roof';
 import { SceneBar } from '../three/SceneBar';
 import { buildSite, planSite } from '../three/site';
 import { capturePng, fileSlug } from '../three/snapshot';
+import { PathTrace } from '../three/render/PathTrace';
+import { LivePost } from '../three/LivePost';
+import { livePost } from '../three/postState';
+import { onTextureLoad } from '../three/textureSet';
+import { onModelLoad } from '../three/furnitureModels';
+import { backdropFor, onSkyLoad, skyFor, skyIdFor } from '../three/sky';
+import { buildLawn, disposeGarden } from '../three/garden';
+import { applyRise, calmMotion, RISE_MS } from '../three/rise';
+import { RenderOverlay } from '../three/render/RenderOverlay';
+import { useRenderStore } from '../three/render/renderStore';
 import { effectiveRoof, STYLES, styleById } from '../three/styles';
-import { LAMP_DISTANCE, sunState } from '../three/sun';
+import { LAMP_DISTANCE, sunState, mixHex, sunPhase } from '../three/sun';
+import { sceneHandle } from '../three/sceneHandles';
 import { useViewStore } from '../three/viewStore';
 import type { CameraPose } from '../three/viewStore';
 import {
@@ -168,11 +181,15 @@ function House({ plan }: { plan: ScenePlan }) {
   const wallsGroup = useMemo(() => buildWalls(model, kit, true), [model, kit]);
   const openingsGroup = useMemo(() => buildOpenings(model.openings, kit), [model, kit]);
   const floorsGroup = useMemo(() => buildFloors(rooms, roomNames ?? {}, kit, open), [rooms, roomNames, kit, open]);
+  // Furniture models arrive after the first build; build again when one does.
+  const [modelsVersion, setModelsVersion] = useState(0);
+  useEffect(() => onModelLoad(() => setModelsVersion((v) => v + 1)), []);
   const furnitureGroup = useMemo(() => {
+    void modelsVersion;
     // furnitureDef reads a mirror of customItems, so a changed definition must rebuild.
     void customItems;
     return buildFurniture(Array.isArray(furniture) ? furniture : [], kit);
-  }, [furniture, customItems, kit]);
+  }, [furniture, customItems, kit, modelsVersion]);
 
   // Dollhouse looks in; Exterior has the roof on; a walk gets ceilings, and the
   // roof too if the house has one (it casts nothing then, so rooms stay sunlit).
@@ -189,6 +206,42 @@ function House({ plan }: { plan: ScenePlan }) {
     [walking, rooms, settings, kit, open],
   );
 
+  // Evening: the rooms light up from inside.
+  const sunHour = useViewStore((s) => s.sunHour);
+  const lit = lampsOn(sunHour) && style.id !== 'maquette';
+  const lampsGroup = useMemo(
+    () => (lit ? buildRoomLamps(rooms, settings.wallHeight, open) : null),
+    [lit, rooms, settings.wallHeight, open],
+  );
+  useDisposal(lampsGroup);
+
+  // The house builds itself when it is first shown, and again when the plan is replaced.
+  const fitNonce = useUiStore((s) => s.fitNonce);
+  const getThree = useThree((s) => s.get);
+  /** How far through the build, 0…1; 1 = standing. */
+  const rise = useRef(1);
+  const { x: bx, z: bz, radius: br } = plan.bounds;
+  const riseParts = useMemo(
+    () => ({ walls: wallsGroup, openings: openingsGroup, furniture: furnitureGroup, roof: roofGroup, x: bx, z: bz, radius: br }),
+    [wallsGroup, openingsGroup, furnitureGroup, roofGroup, bx, bz, br],
+  );
+  useLayoutEffect(() => {
+    if (calmMotion()) return;
+    rise.current = 0;
+    getThree().invalidate();
+  }, [fitNonce, getThree]);
+  // Anything rebuilt mid-build (a furniture model arriving) joins at the same moment of it.
+  useLayoutEffect(() => {
+    applyRise(riseParts, rise.current);
+  }, [riseParts]);
+  useFrame(({ invalidate }, dt) => {
+    if (rise.current >= 1) return;
+    // Counted in drawn frames, not wall time: a slow first frame (shaders, textures) doesn't eat the build.
+    rise.current = Math.min(1, rise.current + (Math.min(dt, 0.05) * 1000) / RISE_MS);
+    applyRise(riseParts, rise.current);
+    if (rise.current < 1) invalidate();
+  });
+
   useDisposal(wallsGroup);
   useDisposal(openingsGroup);
   useDisposal(floorsGroup);
@@ -204,6 +257,7 @@ function House({ plan }: { plan: ScenePlan }) {
       <primitive object={furnitureGroup} />
       {roofGroup && <primitive object={roofGroup} />}
       {ceilingsGroup && <primitive object={ceilingsGroup} />}
+      {lampsGroup && <primitive object={lampsGroup} />}
     </>
   );
 }
@@ -217,23 +271,80 @@ function Site({ plan }: { plan: ScenePlan }) {
   const styleId = usePlanStore((s) => s.look?.style);
   const ground = useMemo(() => sunState(sunHour, styleById(styleId)).ground, [sunHour, styleId]);
   const { rooms, walls, model, settings } = plan;
-  const site = useMemo(() => {
+  const sitePlan = useMemo(() => {
     try {
-      return buildSite(planSite({ rooms, walls, openings: model.openings, wallThickness: settings.wallThickness }));
+      return planSite({ rooms, walls, openings: model.openings, wallThickness: settings.wallThickness });
     } catch {
-      return buildSite(null);
+      return null;
     }
   }, [rooms, walls, model, settings.wallThickness]);
+  const site = useMemo(() => buildSite(sitePlan), [sitePlan]);
+  // Camera shots need to know which way the house faces.
+  useEffect(() => {
+    const e = sitePlan?.entrance;
+    useViewStore.getState().setFront(e && Number.isFinite(e.nx + e.ny) ? [e.nx, e.ny] : [0, 1]);
+  }, [sitePlan]);
   useEffect(() => () => site.dispose(), [site]);
+
+  // Styled looks stand on a lawn that runs to the horizon.
+  const styled = styleById(styleId).id !== 'maquette';
+  const garden = useMemo(() => {
+    if (!styled || !sitePlan) return null;
+    const { x, z, radius } = plan.bounds;
+    const half = settings.wallThickness / 2;
+    // Nothing grows through a room, a wall, the path or the doorstep.
+    const keepOut: Point[][] = rooms.map((r) => r.polygon);
+    for (const w of walls) {
+      const dx = w.b.x - w.a.x;
+      const dy = w.b.y - w.a.y;
+      const len = Math.hypot(dx, dy);
+      if (!(len > 0)) continue;
+      const nx = (-dy / len) * 0.01;
+      const ny = (dx / len) * 0.01;
+      keepOut.push([
+        { x: w.a.x + nx, y: w.a.y + ny },
+        { x: w.b.x + nx, y: w.b.y + ny },
+        { x: w.b.x - nx, y: w.b.y - ny },
+        { x: w.a.x - nx, y: w.a.y - ny },
+      ]);
+    }
+    if (sitePlan.path) keepOut.push(sitePlan.path);
+    if (sitePlan.step) keepOut.push(sitePlan.step);
+    return buildLawn({
+      x,
+      z,
+      radius,
+      color: mixHex('#7f9a58', styleById(styleId).ground, 0.2),
+      keepOut,
+      gap: half + 0.04,
+      margin: half + 0.6,
+    });
+  }, [styled, sitePlan, plan.bounds, styleId, rooms, walls, settings.wallThickness]);
+  useEffect(() => () => disposeGarden(garden), [garden]);
+  useLayoutEffect(() => {
+    // The lawn replaces the plot's flat tone.
+    site.group.traverse((o) => {
+      if (o.name === 'lot' || o.name === 'lot-edge') o.visible = !styled;
+    });
+  }, [site, styled]);
   useLayoutEffect(() => {
     site.setGround(ground);
     // Tinted in place, behind React's back: the view renders on demand, so ask for the frame.
     invalidate();
   }, [site, ground, invalidate]);
-  return <primitive object={site.group} />;
+  return (
+    <>
+      <primitive object={site.group} />
+      {garden && <primitive object={garden} />}
+    </>
+  );
 }
 
 // ---------- light ----------
+
+/** How strongly the photographed sky lights the model, and which way a positive turn rotates it. */
+const SKY_LIGHT = 0.85;
+const SKY_TURN_SIGN = -1;
 
 function Lights({ bounds }: { bounds: Bounds }) {
   const sunHour = useViewStore((s) => s.sunHour);
@@ -245,11 +356,56 @@ function Lights({ bounds }: { bounds: Bounds }) {
   const reach = radius * LAMP_DISTANCE;
   const span = radius * 2.2;
 
+  // Styled looks are lit by a photographed sky; the maquette keeps its studio lamp.
+  const view = useViewStore((s) => s.view);
+  const getThree = useThree((s) => s.get);
+  const [, setSkyVersion] = useState(0);
+  useEffect(() => onSkyLoad(() => setSkyVersion((v) => v + 1)), []);
+  const sky = style.id === 'maquette' ? null : skyFor(skyIdFor(sunHour));
+  const showSky = sky !== null && view !== 'dollhouse';
+  const sunAzimuth = Math.atan2(sun.dir[2], sun.dir[0]);
+  // How light becomes screen colour. Styled looks use a neutral curve, so a wall is the colour its
+  // style chose and highlights roll off softly; the maquette keeps the filmic curve that bleaches
+  // it to paper white.
+  useLayoutEffect(() => {
+    const { gl, invalidate } = getThree();
+    gl.toneMapping = style.id === 'maquette' ? THREE.ACESFilmicToneMapping : THREE.NeutralToneMapping;
+    invalidate();
+  }, [getThree, style.id]);
+  useLayoutEffect(() => {
+    if (!sky) return;
+    const { scene, invalidate } = getThree();
+    // Turn the panorama so its bright side sits where our sun is.
+    const turn = SKY_TURN_SIGN * (sunAzimuth - sky.sunAzimuth);
+    scene.environment = sky.texture;
+    scene.environmentRotation.set(0, turn, 0);
+    // As the sun gets low the sky gives less light, so lamps and the low sun carry the evening.
+    const dim = 1 - 0.6 * Math.pow(Math.abs(sunPhase(sunHour)), 3);
+    scene.environmentIntensity = SKY_LIGHT * style.ambient * (sky.id === 'dusk' ? 1.5 : 1) * dim;
+    if (showSky) {
+      // Behind the house: a drawn sky, calm in every direction. The photograph only lights.
+      scene.background = backdropFor(sunHour);
+      scene.backgroundRotation.set(0, 0, 0);
+      scene.backgroundIntensity = 1;
+    }
+    invalidate();
+    return () => {
+      scene.environment = null;
+      scene.environmentIntensity = 1;
+      if (showSky) scene.background = null;
+      invalidate();
+    };
+  }, [getThree, sky, showSky, sunAzimuth, style.ambient, sunHour]);
+
   return (
     <>
-      <color attach="background" args={[sun.background]} />
+      {!showSky && <color attach="background" args={[sun.background]} />}
       {/* warm key light + soft sky fill: at noon, the maquette under its studio lamp */}
-      <hemisphereLight color={sun.hemiSky} groundColor={sun.hemiGround} intensity={sun.hemiIntensity} />
+      <hemisphereLight
+        color={sun.hemiSky}
+        groundColor={sun.hemiGround}
+        intensity={sky ? sun.hemiIntensity * 0.15 : sun.hemiIntensity}
+      />
       <primitive object={target} position={[x, 0, z]} />
       <directionalLight
         position={[x + sun.dir[0] * reach, sun.dir[1] * reach, z + sun.dir[2] * reach]}
@@ -268,10 +424,13 @@ function Lights({ bounds }: { bounds: Bounds }) {
         position={[x - radius * 1.6, radius * 1.2, z + radius * 1.8]}
         intensity={sun.fillIntensity}
       />
+      {style.id === 'maquette' && (
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[x, -0.002, z]} receiveShadow>
         <circleGeometry args={[Math.max(radius * 5, 24), 64]} />
-        <meshStandardMaterial color={sun.ground} roughness={1} />
+        {/* Furthest back of the ground layers (see site.ts): the lot, path and floors always draw over it. */}
+        <meshStandardMaterial color={sun.ground} roughness={1} polygonOffset polygonOffsetFactor={4} polygonOffsetUnits={4} />
       </mesh>
+      )}
     </>
   );
 }
@@ -339,6 +498,38 @@ function CameraRig({ bounds, start }: { bounds: Bounds; start: CameraPose }) {
     controlsRef.current?.update();
   }, [fitNonce, resetNonce, get]);
 
+  // Ready-made shots: aim the camera, then it is the user's to move again.
+  const shotNonce = useViewStore((s) => s.shotNonce);
+  const seenShot = useRef(shotNonce);
+  useEffect(() => {
+    if (seenShot.current === shotNonce) return;
+    seenShot.current = shotNonce;
+    const { shot, front } = useViewStore.getState();
+    const b = boundsRef.current;
+    const [fx, fz] = front;
+    // To the right of someone leaving by the front door.
+    const [sx, sz] = [-fz, fx];
+    const r = b.radius;
+    let position: [number, number, number];
+    let target: [number, number, number] = [b.x, 1.1, b.z];
+    if (shot === 'street') position = [b.x + fx * r * 2.6 + sx * r * 0.5, 1.65, b.z + fz * r * 2.6 + sz * r * 0.5];
+    else if (shot === 'corner') position = [b.x + fx * r * 2.5 + sx * r * 2.2, r * 0.8 + 2.5, b.z + fz * r * 2.5 + sz * r * 2.2];
+    else if (shot === 'top') {
+      position = [b.x, r * 3.4, b.z + 0.01];
+      target = [b.x, 0, b.z];
+    } else {
+      const pose = defaultPose(b, useUiStore.getState().fitNonce);
+      position = pose.position;
+      target = pose.target;
+    }
+    const { camera, invalidate } = get();
+    camera.position.set(...position);
+    controlsRef.current?.target.set(...target);
+    controlsRef.current?.update();
+    savePose();
+    invalidate();
+  }, [shotNonce, get, savePose]);
+
   return (
     <OrbitControls
       ref={controlsRef}
@@ -347,6 +538,8 @@ function CameraRig({ bounds, start }: { bounds: Bounds; start: CameraPose }) {
       minDistance={1.5}
       maxDistance={bounds.radius * 10}
       onEnd={() => savePose()}
+      // Zoom toward whatever is under the pointer, as if grabbing it.
+      zoomToCursor
       makeDefault
     />
   );
@@ -562,12 +755,15 @@ function SceneBridge() {
   const get = useThree((s) => s.get);
   const controls = useThree((s) => s.controls);
 
+  // Photographed materials arrive after the first frame; the view draws on demand, so ask again.
+  useEffect(() => onTextureLoad(() => get().invalidate()), [get]);
+
   useEffect(() => {
     const snap = () => {
       try {
         const { gl, scene, camera } = get();
         const name = `${fileSlug(usePlanStore.getState().name)}.png`;
-        downloadBlob(capturePng(gl, scene, camera, 2), name, 'image/png');
+        downloadBlob(capturePng(gl, scene, camera, 2, livePost.draw ?? undefined), name, 'image/png');
         toast(`Saved ${name}`);
       } catch {
         toastError("Couldn't save the picture.");
@@ -586,6 +782,21 @@ function SceneBridge() {
     gl.domElement.addEventListener('webglcontextrestored', redraw);
     return () => gl.domElement.removeEventListener('webglcontextrestored', redraw);
   }, [get]);
+
+  // The camera, for the demo tour to move.
+  useEffect(() => {
+    const { camera, scene, invalidate } = get();
+    const handle = {
+      camera,
+      controls: controls as unknown as OrbitLike | null,
+      lit: () => scene.environment !== null,
+      invalidate: () => invalidate(),
+    };
+    sceneHandle.current = handle;
+    return () => {
+      if (sceneHandle.current === handle) sceneHandle.current = null;
+    };
+  }, [get, controls]);
 
   // Dev-only: camera, renderer and controls for the demo recorder and tests.
   useEffect(() => {
@@ -622,7 +833,7 @@ if (import.meta.env.DEV) {
       /** PNG bytes of the current view at `scale`× — the same path the Snapshot button takes. */
       capture: (scale = 2): Uint8Array | null => {
         const t = window.__three;
-        return t ? capturePng(t.gl, t.scene, t.camera, scale) : null;
+        return t ? capturePng(t.gl, t.scene, t.camera, scale, livePost.draw ?? undefined) : null;
       },
     },
     roofs: {
@@ -746,8 +957,10 @@ function useSceneInputs(): { plan: ScenePlan; start: CameraPose; world: WalkWorl
 /** Everything inside the canvas. */
 export function SceneContents() {
   const { plan, start, world } = useSceneInputs();
+  const rendering = useRenderStore((s) => s.phase !== 'off');
   return (
     <>
+      {rendering ? <PathTrace /> : <LivePost />}
       <SceneBridge />
       <Lights bounds={plan.bounds} />
       <Site plan={plan} />
@@ -761,6 +974,10 @@ export function SceneContents() {
 export function Scene3D() {
   const view = useViewStore((s) => s.view);
   const walking = useViewStore((s) => s.walking);
+  const rendering = useRenderStore((s) => s.phase !== 'off');
+
+  // Leaving the model ends a render.
+  useEffect(() => () => useRenderStore.getState().stop(), []);
 
   // Keys for the model view. Capture phase, so Esc can step out of a walk
   // without also dropping back to the plan.
@@ -770,6 +987,16 @@ export function Scene3D() {
       const ui = useUiStore.getState();
       if (ui.mode !== 'model' || ui.commandOpen || ui.shortcutsOpen || useKeyStore.getState().asking) return;
       const scene = useViewStore.getState();
+      const render = useRenderStore.getState();
+      if (render.phase !== 'off') {
+        // While rendering the view is frozen: Esc ends it, everything else waits.
+        if (e.key === 'Escape') render.stop();
+        if (e.key.length === 1 || e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+        return;
+      }
       if (e.key === 'Escape') {
         if (scene.view === 'walk') {
           e.stopPropagation();
@@ -801,6 +1028,10 @@ export function Scene3D() {
         case 'S':
           takeSnapshot();
           break;
+        case 'r':
+        case 'R':
+          render.start();
+          break;
         case '0':
           scene.resetView();
           break;
@@ -821,7 +1052,11 @@ export function Scene3D() {
     <div className={`scene-3d ${walking ? 'walking' : ''}`}>
       <SceneBoundary>
         {/* Drawn when something changes, not 60 times a second: see the invalidate() calls above. */}
-        <Canvas frameloop="demand" shadows="percentage" camera={{ fov: ORBIT_FOV }}>
+        <Canvas
+          frameloop="demand"
+          shadows="percentage"
+          camera={{ fov: ORBIT_FOV }}
+        >
           <SceneContents />
         </Canvas>
       </SceneBoundary>
@@ -839,7 +1074,8 @@ export function Scene3D() {
           )}
         </div>
       )}
-      <SceneBar onSnapshot={takeSnapshot} />
+      {!rendering && <SceneBar onSnapshot={takeSnapshot} />}
+      <RenderOverlay />
     </div>
   );
 }

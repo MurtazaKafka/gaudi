@@ -51,6 +51,26 @@ export function buildRoofMeshes(
     geo.setAttribute('position', new THREE.Float32BufferAttribute(solid.positions, 3));
     // Loose triangles: flat faces, crisp ridges and valleys.
     geo.computeVertexNormals();
+    // UVs in meters: across the slope and up it, so tiles and seams run true on every face.
+    const pos = solid.positions;
+    const uv = new Float32Array((pos.length / 3) * 2);
+    const n = new THREE.Vector3();
+    const t = new THREE.Vector3();
+    const b = new THREE.Vector3();
+    const up = new THREE.Vector3(0, 1, 0);
+    const p = new THREE.Vector3();
+    const normal = geo.getAttribute('normal');
+    for (let i = 0; i < pos.length / 3; i++) {
+      n.fromBufferAttribute(normal, i);
+      t.crossVectors(up, n);
+      if (t.lengthSq() < 1e-8) t.set(1, 0, 0);
+      t.normalize();
+      b.crossVectors(n, t);
+      p.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
+      uv[i * 2] = p.dot(t);
+      uv[i * 2 + 1] = p.dot(b);
+    }
+    geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
     add(geo, solid.part);
   }
   return group;

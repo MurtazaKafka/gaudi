@@ -32,6 +32,8 @@ export function capturePng(
   scene: THREE.Scene,
   camera: THREE.Camera,
   scale = 2,
+  /** Draws the frame the way the screen shows it; defaults to the bare scene. */
+  draw: () => void = () => gl.render(scene, camera),
 ): Uint8Array<ArrayBuffer> {
   const before = gl.getPixelRatio();
   const el = gl.domElement;
@@ -40,10 +42,10 @@ export function capturePng(
   const ratio = Math.max(1, Math.min(scale, 8192 / longest));
   try {
     gl.setPixelRatio(ratio);
-    gl.render(scene, camera);
+    draw();
     return dataUrlBytes(el.toDataURL('image/png'));
   } finally {
     gl.setPixelRatio(before);
-    gl.render(scene, camera);
+    draw();
   }
 }

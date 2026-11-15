@@ -2,7 +2,7 @@ import { memo, useEffect, useEffectEvent, useMemo, useRef, useState } from 'reac
 import { Circle, Group, Layer, Line, Stage } from 'react-konva';
 import type Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
-import { DEFAULT_OPENING_WIDTH, usePlanStore } from '../store';
+import { DEFAULT_OPENING_WIDTH, OPENING_STEPS, usePlanStore } from '../store';
 import { useUiStore } from '../uiStore';
 import { useAiStore } from '../aiStore';
 import { useKeyStore } from '../ai/client';
@@ -12,7 +12,7 @@ import { currentUnits, formatLength, parseLength, useUnits } from '../units';
 import { toastError } from '../toast';
 import { theme } from '../theme';
 import type { DetectedRoom } from '../rooms';
-import type { Furniture, OpeningType, Point, Tool } from '../types';
+import type { Furniture, Opening, OpeningType, Point, Tool } from '../types';
 import { FurnitureShape } from './FurnitureShape';
 import { RoomAiPanel } from './RoomAiPanel';
 import {
@@ -89,6 +89,36 @@ function computeGhost(raw: Point, type: OpeningType, scale: number): OpeningGhos
   if (!wall) return null;
   const spot = placeOpening(openings, wall, DEFAULT_OPENING_WIDTH[type], hit.offset);
   return { wallId: hit.wallId, offset: spot.offset, valid: spot.valid };
+}
+
+/** The door (or window) of this tool's kind that the pointer is on, if any. */
+function openingUnder(raw: Point, type: OpeningType, scale: number): Opening | null {
+  const { walls, openings } = usePlanStore.getState();
+  const hit = nearestWallPoint(raw, walls);
+  const threshold = Math.max(0.3, 16 / scale);
+  if (!hit || hit.dist >= threshold) return null;
+  return (
+    openings.find((o) => o.wallId === hit.wallId && o.type === type && Math.abs(o.offset - hit.offset) <= o.width / 2) ??
+    null
+  );
+}
+
+/**
+ * Click an opening again with its own tool and it steps to the next size: a
+ * door becomes a wide door, then a pair; a window gains lights. A size that
+ * doesn't fit the wall is skipped; after the largest comes the smallest.
+ */
+function stepOpening(opening: Opening): void {
+  const steps = OPENING_STEPS[opening.type];
+  const from = steps.findIndex((w) => w > opening.width + 0.01);
+  const start = from === -1 ? 0 : from;
+  for (let k = 0; k < steps.length; k++) {
+    const width = steps[(start + k) % steps.length];
+    if (Math.abs(width - opening.width) < 0.01) return;
+    usePlanStore.getState().updateOpeningWidth(opening.id, width);
+    const now = usePlanStore.getState().openings.find((o) => o.id === opening.id);
+    if (now && Math.abs(now.width - width) < 0.01) return;
+  }
 }
 
 const sameGhost = (a: OpeningGhost | null, b: OpeningGhost | null): boolean =>
@@ -183,7 +213,8 @@ export function PlanCanvas() {
     const { scale } = viewRef.current;
 
     if (active === 'door' || active === 'window') {
-      const next = computeGhost(ptr.raw, active, scale);
+      // On one of its own kind the tool resizes instead of placing: no ghost there.
+      const next = openingUnder(ptr.raw, active, scale) ? null : computeGhost(ptr.raw, active, scale);
       setGhost((prev) => (sameGhost(prev, next) ? prev : next));
       setSnap(null);
       ui.setCursor(ptr.raw);
@@ -296,6 +327,12 @@ export function PlanCanvas() {
     if (active === 'door' || active === 'window') {
       // Recompute from the pointer (not the rendered ghost) so a click in the
       // same frame as a mouse move can't place against stale state.
+      const existing = openingUnder(raw, active, scale);
+      if (existing) {
+        stepOpening(existing);
+        refresh();
+        return;
+      }
       const g = computeGhost(raw, active, scale);
       if (g?.valid) {
         plan.addOpening(g.wallId, active, g.offset, DEFAULT_OPENING_WIDTH[active]);

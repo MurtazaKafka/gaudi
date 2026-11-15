@@ -8,6 +8,7 @@
 import type { RoofKind } from '../types';
 import { roomKindFromName } from '../roomTypes';
 import type { RoomKind } from '../roomTypes';
+import type { TextureId } from './surfaces';
 
 /** The floor finishes a style defines; every room kind maps onto one (see FLOOR_ZONE). */
 export type FloorZone = 'living' | 'kitchen' | 'bath' | 'bedroom' | 'garage' | 'outdoor';
@@ -20,6 +21,8 @@ export interface FloorSpec {
   /** seams, grout, flecks */ line: string;
   /** meters covered by one repeat of the pattern */ size: number;
   rough: number;
+  /** Photographed material laid over the colour; none keeps the drawn pattern. */
+  tex?: TextureId;
 }
 
 /** The catalog's neutral part colors, by role. A style remaps each role. */
@@ -42,6 +45,10 @@ export interface HouseStyle {
   label: string;
   /** interior wall faces */ wall: string;
   /** exterior wall faces */ cladding: string;
+  /** Photographed materials for the walls and roof (none = flat colour, the maquette). */
+  wallTex?: TextureId;
+  claddingTex?: TextureId;
+  roofTex?: TextureId;
   /** the cut top of the walls, seen from above */ cap: string;
   /** door and window frames, sills */ trim: string;
   door: string;
@@ -86,11 +93,11 @@ const NEUTRAL_ALIASES: Record<string, keyof FurniturePalette> = {
 };
 
 const plain = (color: string): FloorSpec => ({ kind: 'plain', color, line: color, size: 1, rough: 1 });
-const wood = (color: string, line: string, rough = 0.72): FloorSpec => ({ kind: 'wood', color, line, size: 1.2, rough });
-const tile = (color: string, line: string, size = 1.2, rough = 0.45): FloorSpec => ({ kind: 'tile', color, line, size, rough });
-const stone = (color: string, line: string, size = 1.6, rough = 0.7): FloorSpec => ({ kind: 'stone', color, line, size, rough });
-const carpet = (color: string, line: string): FloorSpec => ({ kind: 'carpet', color, line, size: 0.8, rough: 1 });
-const concrete = (color: string, line: string, rough = 0.85): FloorSpec => ({ kind: 'concrete', color, line, size: 2.4, rough });
+const wood = (color: string, line: string, rough = 0.72, tex: TextureId = 'oak'): FloorSpec => ({ kind: 'wood', color, line, size: 1.2, rough, tex });
+const tile = (color: string, line: string, size = 1.2, rough = 0.45): FloorSpec => ({ kind: 'tile', color, line, size, rough, tex: size < 1 ? 'mosaic' : 'tile' });
+const stone = (color: string, line: string, size = 1.6, rough = 0.7): FloorSpec => ({ kind: 'stone', color, line, size, rough, tex: 'stone' });
+const carpet = (color: string, line: string): FloorSpec => ({ kind: 'carpet', color, line, size: 0.8, rough: 1, tex: 'carpet' });
+const concrete = (color: string, line: string, rough = 0.85): FloorSpec => ({ kind: 'concrete', color, line, size: 2.4, rough, tex: 'concrete' });
 
 const MAQUETTE_FLOOR = plain('#d9d3c5');
 
@@ -127,6 +134,9 @@ export const STYLES: readonly HouseStyle[] = [
   {
     id: 'scandinavian',
     label: 'Scandinavian',
+    wallTex: 'plaster',
+    claddingTex: 'timber',
+    roofTex: 'metal',
     wall: '#f7f5ef',
     cladding: '#4d555b',
     cap: '#fbfaf6',
@@ -166,6 +176,9 @@ export const STYLES: readonly HouseStyle[] = [
   {
     id: 'warm-modern',
     label: 'Warm modern',
+    wallTex: 'plaster',
+    claddingTex: 'timber',
+    roofTex: 'metal',
     wall: '#ead7ba',
     cladding: '#b08a62',
     cap: '#4f4035',
@@ -176,7 +189,7 @@ export const STYLES: readonly HouseStyle[] = [
     glassOpacity: 0.3,
     edges: null,
     floors: {
-      living: wood('#b98758', '#96693f'),
+      living: wood('#b98758', '#96693f', 0.72, 'walnut'),
       kitchen: stone('#d8cdbd', '#bdb09d', 1.2),
       bath: tile('#d9cfc2', '#b9ad9d', 0.6),
       bedroom: carpet('#d6c7b2', '#c4b39c'),
@@ -205,6 +218,9 @@ export const STYLES: readonly HouseStyle[] = [
   {
     id: 'industrial',
     label: 'Industrial loft',
+    wallTex: 'plaster',
+    claddingTex: 'brick',
+    roofTex: 'metal',
     wall: '#c6c9ca',
     cladding: '#9a5a45',
     cap: '#2b2d2f',
@@ -218,7 +234,7 @@ export const STYLES: readonly HouseStyle[] = [
       living: concrete('#b3b1ac', '#9a9892', 0.6),
       kitchen: concrete('#aeaca7', '#96948e', 0.5),
       bath: tile('#c9c9c6', '#8f8f8c', 0.6),
-      bedroom: wood('#8e6f52', '#6d5239'),
+      bedroom: wood('#8e6f52', '#6d5239', 0.72, 'walnut'),
       garage: concrete('#a5a39e', '#8d8b86'),
       outdoor: concrete('#b9b7b1', '#a09e98'),
     },
@@ -244,6 +260,9 @@ export const STYLES: readonly HouseStyle[] = [
   {
     id: 'coastal',
     label: 'Coastal',
+    wallTex: 'plaster',
+    claddingTex: 'plaster',
+    roofTex: 'shingle',
     wall: '#edf4f3',
     cladding: '#9fc0cf',
     cap: '#ffffff',
@@ -283,6 +302,9 @@ export const STYLES: readonly HouseStyle[] = [
   {
     id: 'mediterranean',
     label: 'Mediterranean',
+    wallTex: 'plaster',
+    claddingTex: 'render',
+    roofTex: 'clay',
     wall: '#f6e3c1',
     cladding: '#ecd0a2',
     cap: '#b8603f',
@@ -296,7 +318,7 @@ export const STYLES: readonly HouseStyle[] = [
       living: tile('#c98a62', '#a66f4c', 0.7, 0.6),
       kitchen: tile('#d7a47c', '#b07f5a', 0.7, 0.55),
       bath: tile('#e7dcc6', '#3f6f73', 0.6),
-      bedroom: wood('#b58a5f', '#946d45'),
+      bedroom: wood('#b58a5f', '#946d45', 0.72, 'walnut'),
       garage: concrete('#cdbfa9', '#b6a892'),
       outdoor: stone('#d9c6a5', '#bba784'),
     },
@@ -322,6 +344,9 @@ export const STYLES: readonly HouseStyle[] = [
   {
     id: 'nocturne',
     label: 'Nocturne',
+    wallTex: 'plaster',
+    claddingTex: 'charred',
+    roofTex: 'slate',
     wall: '#3c4045',
     cladding: '#26292d',
     cap: '#17191b',
@@ -332,7 +357,7 @@ export const STYLES: readonly HouseStyle[] = [
     glassOpacity: 0.3,
     edges: null,
     floors: {
-      living: wood('#5a4334', '#3f2e23', 0.6),
+      living: wood('#5a4334', '#3f2e23', 0.6, 'walnut'),
       kitchen: stone('#484b4f', '#35373a', 1.2, 0.4),
       bath: tile('#4b4f54', '#2e3033', 0.6, 0.35),
       bedroom: carpet('#4a4744', '#3c3936'),
@@ -395,6 +420,11 @@ export const FLOOR_ZONE: Record<RoomKind, FloorZone> = {
 export function floorFor(style: HouseStyle, roomName: string | undefined | null, openAir = false): FloorSpec {
   const zone = openAir ? 'outdoor' : FLOOR_ZONE[roomKindFromName(roomName)];
   return style.floors[zone] ?? style.floors.living;
+}
+
+/** The colours catalog furniture takes under a style (the catalog's own neutrals for the maquette). */
+export function furniturePalette(style: HouseStyle): FurniturePalette {
+  return style.furniture ?? NEUTRAL;
 }
 
 /**

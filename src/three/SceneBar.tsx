@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
+import { useRenderStore } from './render/renderStore';
 import { usePlanStore } from '../store';
 import { useUiStore } from '../uiStore';
 import { useDismiss } from '../components/useDismiss';
@@ -6,7 +7,7 @@ import type { RoofKind } from '../types';
 import { chooseRoof, chooseStyle } from './lookActions';
 import { effectiveRoof, ROOF_LABELS, STYLES, styleById } from './styles';
 import type { HouseStyle } from './styles';
-import { formatHour, SUN_MAX, SUN_MIN, useViewStore } from './viewStore';
+import { formatHour, SUN_MAX, SUN_MIN, useViewStore, SHOTS } from './viewStore';
 import type { SceneView } from './viewStore';
 
 const VIEWS: { id: SceneView; label: string; key: string; title: string }[] = [
@@ -38,13 +39,14 @@ const Caret = () => (
 /** The one control strip for the model: view, style, roof, sun, snapshot, reset. */
 export function SceneBar({ onSnapshot }: { onSnapshot: () => void }) {
   const view = useViewStore((s) => s.view);
+  const walking = useViewStore((s) => s.walking);
   const sunHour = useViewStore((s) => s.sunHour);
   const look = usePlanStore((s) => s.look);
   const readOnly = useUiStore((s) => s.readOnly);
   const style = styleById(look?.style);
   const roof: RoofKind = ROOFS.includes(look?.roof) ? look.roof : 'none';
 
-  const [menu, setMenu] = useState<'style' | 'roof' | null>(null);
+  const [menu, setMenu] = useState<'style' | 'roof' | 'shot' | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const closeMenu = useCallback(() => setMenu(null), [setMenu]);
   useDismiss(ref, menu !== null, closeMenu);
@@ -174,6 +176,14 @@ export function SceneBar({ onSnapshot }: { onSnapshot: () => void }) {
 
       <span className="float-rule" />
 
+      <button
+        className="btn small accent"
+        title="Render this view with realistic light and shadows — R"
+        disabled={walking}
+        onClick={() => useRenderStore.getState().start()}
+      >
+        Render
+      </button>
       <button className="icon-btn" title="Save a picture — S" aria-label="Save a picture" onClick={onSnapshot}>
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
           <path
@@ -185,6 +195,38 @@ export function SceneBar({ onSnapshot }: { onSnapshot: () => void }) {
           <circle cx="8" cy="8.8" r="2.3" stroke="currentColor" strokeWidth="1.3" />
         </svg>
       </button>
+      <div className="pop-anchor">
+        <button
+          className={`btn small quiet ${menu === 'shot' ? 'active' : ''}`}
+          title="Camera positions"
+          aria-haspopup="menu"
+          aria-expanded={menu === 'shot'}
+          disabled={walking}
+          onClick={() => setMenu(menu === 'shot' ? null : 'shot')}
+        >
+          Shot
+        </button>
+        {menu === 'shot' && (
+          <div className="menu up" role="menu">
+            <div className="menu-label">Camera</div>
+            {SHOTS.map((s) => (
+              <button
+                key={s.id}
+                role="menuitem"
+                className="menu-item"
+                title={s.hint}
+                onClick={() => {
+                  useViewStore.getState().takeShot(s.id);
+                  setMenu(null);
+                }}
+              >
+                {s.label}
+                <span className="menu-meta">{s.hint}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
       <button
         className="icon-btn"
         title="Reset the view — 0"

@@ -8,6 +8,15 @@ import { create } from 'zustand';
 export type SceneView = 'dollhouse' | 'exterior' | 'walk';
 export type OrbitView = Exclude<SceneView, 'walk'>;
 
+/** Ready-made camera positions. */
+export type Shot = 'aerial' | 'street' | 'corner' | 'top';
+export const SHOTS: readonly { id: Shot; label: string; hint: string }[] = [
+  { id: 'aerial', label: 'Aerial', hint: 'Looking down from the corner' },
+  { id: 'street', label: 'Street', hint: 'Eye level, facing the entrance' },
+  { id: 'corner', label: 'Corner', hint: 'Low three-quarter view' },
+  { id: 'top', label: 'Top', hint: 'Straight down' },
+];
+
 export const SUN_MIN = 6;
 export const SUN_MAX = 20;
 export const SUN_NOON = 12;
@@ -31,6 +40,11 @@ interface ViewState {
   pose: CameraPose | null;
   /** Bumped to ask the scene to refit its camera. */
   resetNonce: number;
+  /** The shot last asked for, and a counter so asking again re-aims. */
+  shot: Shot;
+  shotNonce: number;
+  /** Which way the house faces (unit vector in plan x/z, out of the front door). */
+  front: [number, number];
 
   setView: (view: SceneView) => void;
   setWalking: (walking: boolean) => void;
@@ -39,6 +53,8 @@ interface ViewState {
   setSunHour: (hour: number) => void;
   setPose: (pose: CameraPose | null) => void;
   resetView: () => void;
+  takeShot: (shot: Shot) => void;
+  setFront: (front: [number, number]) => void;
 }
 
 export const useViewStore = create<ViewState>((set) => ({
@@ -48,6 +64,9 @@ export const useViewStore = create<ViewState>((set) => ({
   sunHour: SUN_NOON,
   pose: null,
   resetNonce: 0,
+  shot: 'aerial',
+  shotNonce: 0,
+  front: [0, 1],
 
   setView: (view) =>
     set((s) => ({
@@ -61,6 +80,15 @@ export const useViewStore = create<ViewState>((set) => ({
     set({ sunHour: Number.isFinite(hour) ? Math.min(SUN_MAX, Math.max(SUN_MIN, hour)) : SUN_NOON }),
   setPose: (pose) => set({ pose }),
   resetView: () => set((s) => ({ resetNonce: s.resetNonce + 1 })),
+  takeShot: (shot) =>
+    set((s) => ({
+      shot,
+      shotNonce: s.shotNonce + 1,
+      // Shots from outside make sense with the roof on; walking ends.
+      view: s.view === 'walk' ? s.orbitView : s.view,
+      walking: false,
+    })),
+  setFront: (front) => set((s) => (s.front[0] === front[0] && s.front[1] === front[1] ? s : { front })),
 }));
 
 /** "6:30", "14:00" — plain 24-hour clock. */

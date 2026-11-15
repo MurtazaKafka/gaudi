@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
+import { texturesReady } from './three/textureSet';
 import { usePlanStore } from './store';
 import { downloadBlob } from './serialize';
 import { buildHouse, disposeGroup } from './three/house';
@@ -37,6 +38,7 @@ export function buildExportScene(): THREE.Scene {
 export async function exportGlb(): Promise<void> {
   const scene = buildExportScene();
   try {
+    await texturesReady(); // the file embeds the photographs
     const result = await new GLTFExporter().parseAsync(scene, { binary: true });
     downloadBlob(result as ArrayBuffer, `${scene.name}.glb`, 'model/gltf-binary');
   } finally {

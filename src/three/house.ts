@@ -10,6 +10,7 @@
 import * as THREE from 'three';
 import type { WallModel, WallPiece, PlacedOpening } from '../build';
 import { buildWallModel } from '../build';
+import { DOUBLE_DOOR_MIN, TRIPLE_WINDOW_MIN } from '../openingSizes';
 import { detectRooms } from '../rooms';
 import type { DetectedRoom } from '../rooms';
 import { furnitureDef, isBuiltinKind } from '../catalog';
@@ -19,9 +20,12 @@ import { buildItemGroup } from './partGeometry';
 import { buildRoof } from './roof';
 import type { RoofModel, RoofPart } from './roof';
 import { buildRoofMeshes } from './roofMesh';
-import { floorFor, furnitureTint } from './styles';
+import { floorFor, furnitureTint, furniturePalette } from './styles';
+import { buildModelItem } from './furnitureModels';
 import type { FloorSpec, HouseStyle } from './styles';
 import { floorTexture } from './textures';
+import { tintFor, type TextureId } from './surfaces';
+import { surfaceMaps } from './textureSet';
 import { mixHex } from './sun';
 
 // ---------- materials ----------
@@ -58,29 +62,54 @@ export function materialKit(style: HouseStyle): MaterialKit {
   const std = (name: string, color: string, roughness: number, extra: THREE.MeshStandardMaterialParameters = {}) =>
     named(new THREE.MeshStandardMaterial({ color, roughness, ...extra }), name);
 
+  /** A photographed surface tinted to read as `color` overall; flat colour when there is no photo (or no browser). */
+  const surface = (
+    name: string,
+    color: string,
+    roughness: number,
+    tex: TextureId | undefined,
+    extra: THREE.MeshStandardMaterialParameters = {},
+  ) => {
+    const maps = tex ? surfaceMaps(tex) : null;
+    if (!tex || !maps) return std(name, color, roughness, extra);
+    const m = std(name, '#ffffff', 1, { ...maps, ...extra });
+    m.color.setRGB(...tintFor(color, tex));
+    return m;
+  };
+
   const floors = new Map<string, THREE.MeshStandardMaterial>();
   const kit: MaterialKit = {
     style,
-    walls: [std('wall', style.wall, 0.92), std('cladding', style.cladding, 0.9), std('wall-cap', style.cap, 0.92)],
+    walls: [
+      surface('wall', style.wall, 0.92, style.wallTex),
+      surface('cladding', style.cladding, 0.9, style.claddingTex),
+      std('wall-cap', style.cap, 0.92),
+    ],
     trim: std('trim', style.trim, 0.7),
-    door: std('door', style.door, 0.65),
+    door: surface('door', style.door, 0.6, style.id === 'maquette' ? undefined : 'walnut'),
     handle: std('handle', '#b9b5ac', 0.35, { metalness: 0.6 }),
-    glass: std('glass', style.glass, 0.08, {
+    // Styled looks get glass that catches the sky; the maquette keeps its soft film.
+    glass: std('glass', style.glass, style.id === 'maquette' ? 0.08 : 0.03, {
       transparent: true,
-      opacity: style.glassOpacity,
+      opacity: style.id === 'maquette' ? style.glassOpacity : Math.min(0.6, style.glassOpacity + 0.14),
       depthWrite: false,
       side: THREE.DoubleSide,
+      envMapIntensity: 1.7,
     }),
     ceiling: std('ceiling', mixHex(style.wall, '#ffffff', 0.35), 1),
     roof: {
-      roof: std('roof', style.roof, 0.85, { side: THREE.DoubleSide }),
-      gable: std('roof-gable', style.cladding, 0.9, { side: THREE.DoubleSide }),
+      roof: surface('roof', style.roof, 0.85, style.roofTex, { side: THREE.DoubleSide }),
+      gable: surface('roof-gable', style.cladding, 0.9, style.claddingTex, { side: THREE.DoubleSide }),
       soffit: std('roof-soffit', style.trim, 0.9, { side: THREE.DoubleSide }),
     },
     edges: style.edges ? named(new THREE.LineBasicMaterial({ color: style.edges }), 'edges') : null,
     floor: (spec) => {
-      const key = `${spec.kind}|${spec.color}|${spec.line}|${spec.rough}`;
+      const key = `${spec.kind}|${spec.color}|${spec.line}|${spec.rough}|${spec.tex ?? ''}`;
       let m = floors.get(key);
+      if (!m && spec.tex && surfaceMaps(spec.tex)) {
+        m = surface(`floor-${spec.kind}`, spec.color, spec.rough, spec.tex, { side: THREE.DoubleSide });
+        floors.set(key, m);
+      }
       if (!m) {
         const map = floorTexture(spec);
         m = std(`floor-${spec.kind}`, map ? '#ffffff' : spec.color, spec.rough, { side: THREE.DoubleSide, map });
@@ -133,6 +162,8 @@ function pieceGeometry(piece: WallPiece): THREE.BufferGeometry {
   }
   const positions: number[][] = [[], [], []];
   const normals: number[][] = [[], [], []];
+  // UVs in meters: along the face and up it for sides, plan x/z for the top.
+  const uvs: number[][] = [[], [], []];
 
   // Emit a triangle wound to face along (nx, ny, nz).
   const tri = (
@@ -154,6 +185,10 @@ function pieceGeometry(piece: WallPiece): THREE.BufferGeometry {
     const [p, q] = facing >= 0 ? [b, c] : [c, b];
     positions[g].push(...a, ...p, ...q);
     normals[g].push(nx, ny, nz, nx, ny, nz, nx, ny, nz);
+    for (const v of [a, p, q]) {
+      if (Math.abs(ny) > 0.5) uvs[g].push(v[0], v[2]);
+      else uvs[g].push(v[0] * -nz + v[2] * nx, v[1]);
+    }
   };
 
   for (let i = 0; i < n; i++) {
@@ -186,6 +221,7 @@ function pieceGeometry(piece: WallPiece): THREE.BufferGeometry {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(positions.flat(), 3));
   geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals.flat(), 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs.flat(), 2));
   let start = 0;
   positions.forEach((list, g) => {
     const count = list.length / 3;
@@ -263,18 +299,27 @@ function buildDoor(o: PlacedOpening, kit: MaterialKit): THREE.Group {
   g.add(boxMesh('frame', kit.trim, w - 2 * ft, ft, depth, 0, o.y1 - ft / 2, 0));
 
   // The leaf hangs on the jamb nearer the wall's A end and opens to the same
-  // side as the swing arc drawn on the plan.
-  const lw = Math.max(0.05, w - 2 * ft - 0.01);
+  // side as the swing arc drawn on the plan. A wide doorway gets a pair.
+  const clear = Math.max(0.05, w - 2 * ft - 0.01);
   const lh = Math.max(0.05, h - ft - 0.012);
-  const leaf = new THREE.Group();
-  leaf.name = 'leaf';
-  leaf.position.set(-w / 2 + ft, o.y0, 0);
-  leaf.rotation.y = DOOR_AJAR;
-  leaf.add(boxMesh('leaf', kit.door, lw, lh, 0.04, lw / 2, lh / 2 + 0.006, 0));
   const hy = Math.min(1.0, lh * 0.5);
-  leaf.add(boxMesh('handle', kit.handle, 0.1, 0.022, 0.03, lw - 0.1, hy, 0.035, false));
-  leaf.add(boxMesh('handle', kit.handle, 0.1, 0.022, 0.03, lw - 0.1, hy, -0.035, false));
-  g.add(leaf);
+  const hang = (name: string, lw: number, hingeX: number, dir: 1 | -1): void => {
+    const leaf = new THREE.Group();
+    leaf.name = name;
+    leaf.position.set(hingeX, o.y0, 0);
+    leaf.rotation.y = DOOR_AJAR * dir;
+    leaf.add(boxMesh('leaf', kit.door, lw, lh, 0.04, (dir * lw) / 2, lh / 2 + 0.006, 0));
+    leaf.add(boxMesh('handle', kit.handle, 0.1, 0.022, 0.03, dir * (lw - 0.1), hy, 0.035, false));
+    leaf.add(boxMesh('handle', kit.handle, 0.1, 0.022, 0.03, dir * (lw - 0.1), hy, -0.035, false));
+    g.add(leaf);
+  };
+  if (w >= DOUBLE_DOOR_MIN) {
+    const lw = clear / 2 - 0.003;
+    hang('leaf', lw, -w / 2 + ft, 1);
+    hang('leaf-2', lw, w / 2 - ft, -1);
+  } else {
+    hang('leaf', clear, -w / 2 + ft, 1);
+  }
   return g;
 }
 
@@ -289,7 +334,10 @@ function buildWindow(o: PlacedOpening, kit: MaterialKit): THREE.Group {
   g.add(boxMesh('frame', kit.trim, ft, h, depth, w / 2 - ft / 2, yc, 0));
   g.add(boxMesh('frame', kit.trim, w - 2 * ft, ft, depth, 0, o.y1 - ft / 2, 0));
   g.add(boxMesh('frame', kit.trim, w - 2 * ft, ft, depth, 0, o.y0 + ft / 2, 0));
-  if (w > 1.3) g.add(boxMesh('mullion', kit.trim, 0.035, h - 2 * ft, 0.05, 0, yc, 0));
+  if (w >= TRIPLE_WINDOW_MIN) {
+    // Three lights.
+    for (const x of [-w / 6, w / 6]) g.add(boxMesh('mullion', kit.trim, 0.035, h - 2 * ft, 0.05, x, yc, 0));
+  } else if (w > 1.3) g.add(boxMesh('mullion', kit.trim, 0.035, h - 2 * ft, 0.05, 0, yc, 0));
   if (o.y0 > 0.05) g.add(boxMesh('sill', kit.trim, w + 0.08, 0.035, o.thickness + 0.14, 0, o.y0 + 0.012, 0));
   const glass = boxMesh('glass', kit.glass, w - 2 * ft, h - 2 * ft, 0.012, 0, yc, 0, false);
   glass.receiveShadow = false;
@@ -328,13 +376,26 @@ function planShape(polygon: Point[]): THREE.Shape | null {
 }
 
 /** A flat polygon lying in the plan: shape (x, y) → world (x, 0, y). `uvScale` = repeats per meter. */
-function flatGeometry(polygon: Point[], uvScale: number): THREE.BufferGeometry | null {
+function flatGeometry(polygon: Point[], uvScale: number, faceUp = false): THREE.BufferGeometry | null {
   const shape = planShape(polygon);
   if (!shape) return null;
   const geo = new THREE.ShapeGeometry(shape);
   const uv = geo.getAttribute('uv');
   for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * uvScale, uv.getY(i) * uvScale);
-  geo.rotateX(Math.PI / 2);
+  geo.rotateX(Math.PI / 2); // now faces down, as a ceiling does
+  if (faceUp) {
+    // A floor is looked at and lit from above: turn the faces over so normal maps shade the right way.
+    const index = geo.getIndex();
+    if (index) {
+      for (let i = 0; i < index.count; i += 3) {
+        const b = index.getX(i + 1);
+        index.setX(i + 1, index.getX(i + 2));
+        index.setX(i + 2, b);
+      }
+    }
+    const normal = geo.getAttribute('normal');
+    for (let i = 0; i < normal.count; i++) normal.setXYZ(i, 0, 1, 0);
+  }
   return geo;
 }
 
@@ -350,7 +411,9 @@ export function buildFloors(
   for (const room of rooms) {
     const name = roomNames[room.key];
     const spec = floorFor(kit.style, name, open?.has(room.key));
-    const geo = flatGeometry(room.polygon, 1 / Math.max(0.05, spec.size));
+    // Photographed materials carry their own real-world size; drawn patterns repeat every `spec.size`.
+    const photo = !!spec.tex && typeof document !== 'undefined';
+    const geo = flatGeometry(room.polygon, photo ? 1 : 1 / Math.max(0.05, spec.size), true);
     if (!geo) continue;
     const mesh = shadows(new THREE.Mesh(geo, kit.floor(spec)), false);
     mesh.position.y = 0.01;
@@ -399,7 +462,10 @@ export function buildFurniture(furniture: Furniture[], kit: MaterialKit): THREE.
       if (!def || !Array.isArray(def.parts)) continue;
       // Catalog pieces take the style's palette; product and custom items keep their own colors.
       const tint = isBuiltinKind(item.kind) ? kit.tint : undefined;
-      const g = buildItemGroup(def, kit.furniture, tint, true);
+      // Real furniture where the catalog has a model for it; the box-built parts until it loads, and for custom items.
+      const g =
+        (isBuiltinKind(item.kind) && buildModelItem(item.kind, def, furniturePalette(kit.style), kit.furniture)) ||
+        buildItemGroup(def, kit.furniture, tint, true);
       g.position.set(item.x, 0, item.y);
       g.rotation.y = -item.rotation;
       g.name = nodeName('', item.label ? `${def.label} ${item.label}` : def.label, 'item');
@@ -407,6 +473,41 @@ export function buildFurniture(furniture: Furniture[], kit: MaterialKit): THREE.
     } catch {
       // One broken item must not take the model down.
     }
+  }
+  return group;
+}
+
+// ---------- lamps ----------
+
+/** Lamps come on when the sun is low. */
+export const lampsOn = (hour: number): boolean => hour >= 18 || hour <= 6.5;
+
+/**
+ * One warm ceiling lamp per roofed room, for evening views: a light, and a
+ * small glowing fitting where the ceiling is. Scene dressing only.
+ */
+export function buildRoomLamps(
+  rooms: DetectedRoom[],
+  height: number,
+  open?: ReadonlySet<string> | null,
+): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'lamps';
+  const glow = new THREE.MeshStandardMaterial({ color: '#fff1d0', emissive: '#ffd9a0', emissiveIntensity: 2.2, roughness: 0.6 });
+  glow.name = 'lamp-glow';
+  const y = Math.max(1.8, height - 0.35);
+  for (const room of rooms.slice(0, 24)) {
+    if (open?.has(room.key) || !finite(room.centroid.x, room.centroid.y)) continue;
+    // Bigger rooms get a stronger lamp; a closet gets a small one.
+    const power = Math.min(1.6, Math.max(0.45, Math.sqrt(room.area) / 3.6));
+    const light = new THREE.PointLight('#ffd9a8', 9 * power, 0, 2);
+    light.position.set(room.centroid.x, y, room.centroid.y);
+    light.name = 'lamp';
+    group.add(light);
+    const fitting = new THREE.Mesh(new THREE.SphereGeometry(0.11, 16, 12), glow);
+    fitting.position.copy(light.position);
+    fitting.name = 'lamp-fitting';
+    group.add(fitting);
   }
   return group;
 }

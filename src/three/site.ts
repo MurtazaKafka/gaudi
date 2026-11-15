@@ -210,7 +210,8 @@ export function buildSite(plan: SitePlan | null): Site {
   const group = new THREE.Group();
   group.name = 'site';
   // Thin layers lying on the ground: polygon offset keeps them from flickering against it at a distance.
-  const layer = (n: number) => ({ polygonOffset: true, polygonOffsetFactor: -n, polygonOffsetUnits: -n });
+  // Pushed back in depth, never pulled forward: a layer pulled toward the camera paints over the room floors a centimeter above it.
+  const layer = (n: number) => ({ polygonOffset: true, polygonOffsetFactor: 4 - n, polygonOffsetUnits: 4 - n });
   const lotMat = new THREE.MeshStandardMaterial({ roughness: 1, ...layer(1) });
   const edgeMat = new THREE.LineBasicMaterial();
   const pathMat = new THREE.MeshStandardMaterial({ roughness: 0.95, ...layer(3) });

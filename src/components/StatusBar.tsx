@@ -8,8 +8,8 @@ import '../styles/plan.css';
 const hints: Record<Tool, string> = {
   wall: 'click to place · type a length, enter · ⇧ locks the angle · esc ends the run',
   select: 'click to select · drag to move · arrows nudge · ⌘D duplicates · ⌫ deletes',
-  door: 'hover a wall · click to place a door · esc for select',
-  window: 'hover a wall · click to place a window · esc for select',
+  door: 'click a wall to place a door · click a door again to widen it, then pair it · esc for select',
+  window: 'click a wall to place a window · click a window again for the next size · esc for select',
   furniture: 'click to place · R rotates · esc for select',
   measure: 'click two points to measure · ⇧ locks the angle · esc clears',
 };
@@ -37,7 +37,7 @@ export function StatusBar() {
 
   const inPlan = mode === 'plan';
   const hint = !inPlan
-    ? 'drag orbits · scroll zooms · ⇧ drag pans · esc returns to plan'
+    ? 'drag orbits · scroll zooms toward the pointer · ⇧ drag pans · R renders · esc returns to plan'
     : readOnly && tool !== 'measure'
       ? VIEW_ONLY_HINT
       : hints[tool];

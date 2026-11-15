@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { Circle, Group, Label, Line, Path, Rect, Shape, Tag, Text } from 'react-konva';
 import type Konva from 'konva';
-import { usePlanStore } from '../../store';
+import { DOUBLE_DOOR_MIN, usePlanStore } from '../../store';
 import { useUiStore } from '../../uiStore';
 import { beginGesture, endGesture } from '../../history';
 import { dist, midpoint, ptEq, wallAngle } from '../../geometry';
@@ -501,26 +501,35 @@ export const OpeningShape = memo(function OpeningShape({
 
         {opening.type === 'door' ? (
           <>
-            {/* leaf + quarter-circle swing */}
-            {color && (
-              <Path
-                data={`M ${-half} ${-ht} L ${-half} ${-ht - w} A ${w} ${w} 0 0 1 ${half} ${-ht} Z`}
-                fill={ghost || selected ? theme.accentSoft : theme.swingFill}
-                listening={false}
-              />
-            )}
-            <Line
-              points={[-half, -ht, -half, -ht - w]}
-              stroke={color ? ink : soft}
-              strokeWidth={color ? 1.7 / scale : thin}
-              listening={false}
-            />
-            <Path
-              data={`M ${-half} ${-ht - w} A ${w} ${w} 0 0 1 ${half} ${-ht}`}
-              stroke={soft}
-              strokeWidth={thin}
-              listening={false}
-            />
+            {/* leaf + quarter-circle swing; a wide doorway is a pair of leaves meeting in the middle */}
+            {(w >= DOUBLE_DOOR_MIN
+              ? [
+                  { hinge: -half, r: half, dir: 1 },
+                  { hinge: half, r: half, dir: -1 },
+                ]
+              : [{ hinge: -half, r: w, dir: 1 }]
+            ).map(({ hinge, r, dir }) => {
+              const sweep = dir === 1 ? 1 : 0;
+              const arc = `M ${hinge} ${-ht - r} A ${r} ${r} 0 0 ${sweep} ${hinge + dir * r} ${-ht}`;
+              return (
+                <Group key={hinge} listening={false}>
+                  {color && (
+                    <Path
+                      data={`M ${hinge} ${-ht} L ${arc.slice(2)} Z`}
+                      fill={ghost || selected ? theme.accentSoft : theme.swingFill}
+                      listening={false}
+                    />
+                  )}
+                  <Line
+                    points={[hinge, -ht, hinge, -ht - r]}
+                    stroke={color ? ink : soft}
+                    strokeWidth={color ? 1.7 / scale : thin}
+                    listening={false}
+                  />
+                  <Path data={arc} stroke={soft} strokeWidth={thin} listening={false} />
+                </Group>
+              );
+            })}
           </>
         ) : color ? (
           <>
