@@ -18,6 +18,7 @@ import { usePlanStore } from '../store';
 import { useViewStore } from '../three/viewStore';
 import { toast } from '../toast';
 import { useUiStore } from '../uiStore';
+import { startDemo } from '../demo/tour';
 import { formatArea, formatLength, useUnits } from '../units';
 import '../styles/ask.css';
 
@@ -295,6 +296,7 @@ function Bar() {
       keywords: 'units toggle imperial metric inches metres',
     },
     { id: 'fit', label: 'Zoom to fit', keywords: 'view center whole plan', kbd: '0' },
+    { id: 'demo', label: 'Play the demo', keywords: 'tour watch showcase intro walkthrough video' },
     ...(mode === 'model'
       ? [{ id: 'plan', label: 'Back to plan', keywords: 'model 2d drawing', kbd: 'B' }]
       : hasWalls
@@ -334,6 +336,9 @@ function Bar() {
     switch (id) {
       case 'generate':
         ui.openGenerate();
+        break;
+      case 'demo':
+        startDemo();
         break;
       case 'furnish-room':
         if (roomCommand) void runFurnish(roomCommand.key, { replace: roomCommand.furnished });

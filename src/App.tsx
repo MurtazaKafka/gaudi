@@ -20,6 +20,8 @@ import { usePreviewStore } from './preview';
 import { redo, undo } from './history';
 import { useKeyStore } from './ai/client';
 import { enterSharedView, exitSharedView, useShareStore } from './share/shareStore';
+import { DemoOverlay } from './demo/DemoOverlay';
+import { startDemo } from './demo/tour';
 
 // three.js only loads when the user first builds the model.
 const Scene3D = lazy(() =>
@@ -27,6 +29,7 @@ const Scene3D = lazy(() =>
 );
 
 const SHARE_HASH = /^#\/p\/([A-Za-z0-9]{6,20})/;
+const DEMO_HASH = '#/demo';
 
 function isTypingTarget(el: EventTarget | null): boolean {
   if (!(el instanceof HTMLElement)) return false;
@@ -128,6 +131,8 @@ export default function App() {
   useEffect(() => {
     const apply = () => {
       const m = location.hash.match(SHARE_HASH);
+      // #/demo plays the tour: one link for a pitch, a post, or a first visit.
+      if (location.hash === DEMO_HASH) startDemo();
       if (m) void enterSharedView(m[1]);
       else if (useShareStore.getState().viewId) exitSharedView(false);
     };
@@ -184,6 +189,7 @@ export default function App() {
       <KeyDialog />
       <ShortcutsDialog />
       <Toasts />
+      <DemoOverlay />
     </div>
   );
 }

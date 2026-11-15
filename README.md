@@ -7,6 +7,18 @@ A 2D drafting canvas (react-konva) feeding a 3D extruded model (react-three-fibe
 One Zustand store holds the plan — walls, rooms, openings, settings — as the single
 source of truth; the 3D scene is always regenerated from it, never edited directly.
 
+## Demo
+
+**<https://gaudi-tau.vercel.app/#/demo>** plays a one-minute tour: Gaudí draws
+a house, furnishes it, builds it, changes its look, takes it to dusk and
+renders it, with a caption for each step. It is the real app driving itself
+(`src/demo/tour.ts`), not a video — so it needs no API key, costs nothing, and
+never touches the visitor's own plan (it plays on a preview). `Esc` leaves at
+any point; the closing card offers to keep the house as a new project.
+
+Also reachable from the start sheet ("Watch the one-minute demo") and from
+`⌘K` → "Play the demo".
+
 ## Run
 
 ```sh
@@ -40,6 +52,7 @@ The app works without the API; sharing and reading product links need it.
 | Navigate 3D | drag orbits · scroll zooms · shift-drag pans · `Esc` back to plan |
 | Dress the model | the bar under the model: view (`1` dollhouse · `2` exterior · `3` walk), style, roof, time of day, `S` saves a picture |
 | Walk through | `3`, click the floor, `W` `A` `S` `D` and the mouse; `Esc` steps back out |
+| Render | in the 3D view, **Render** (or `R`): the view is path-traced with real light bounces and soft shadows, pick Screen / 2K / 4K, then **Save image**. **Shot** sets the camera: Aerial, Street, Corner, Top |
 | Pan / zoom 2D | scroll pans · `⌘`-scroll or pinch zooms · space-drag pans |
 | Undo / redo | `⌘Z` / `⇧⌘Z` — everything is undoable, including AI edits and generated plans |
 | Plan look | `C` switches Color (room fills, solid walls, furnished) and Paper (line drawing) |
@@ -79,6 +92,60 @@ retries around a block and never fetches search pages. When a retailer
 declines, Gaudí looks the product up through Claude's hosted web search, and
 "paste the details or drop a photo" always works. Search uses the same hosted
 web search. The endpoint only fetches public https hosts.
+
+## The 3D model
+
+Every style except the maquette is built from real assets, all CC0 and all in
+`public/` (about 9 MB, loaded only when the 3D view opens):
+
+- **Materials** — photographed PBR textures from Poly Haven (wood, tile,
+  carpet, plaster, brick, timber, roofing) in `public/textures`, tinted to
+  each style's palette. The list is in `src/three/surfaces.ts`.
+- **Furniture** — low-poly models from the Kenney Furniture Kit in
+  `public/models`, stretched to each catalog item's footprint and recoloured
+  from the style (`src/three/furnitureModels.ts`). Product items from links
+  keep their own Claude-built models.
+- **Light** — two HDR skies from Poly Haven in `public/sky` light the model;
+  the sun follows the time-of-day slider, and from 18:00 the rooms light up
+  from inside. The sky you *see* is drawn (a three-colour gradient that
+  shifts with the hour, `src/three/sky.ts`), so it is calm in every direction.
+- **Lawn** — no photograph: soft ground with slow drifts of tone out to the
+  horizon, and around the house tufts of real blades in one instanced mesh
+  that keep clear of rooms, walls, path and doorstep and thin out with
+  distance (`src/three/garden.ts`). Scene dressing, never in the plan.
+
+### How the live view becomes a picture
+
+Ideas borrowed from Tiny Glade, kept to what a browser's WebGL2 does cheaply
+(`src/three/LivePost.tsx`). The view draws on demand, so none of this costs
+anything while the model is still:
+
+- **Shading where surfaces meet** (three.js's GTAO pass) — walls, furniture
+  and ground sit together instead of floating.
+- **Soft focus** — whatever the camera turns around stays sharp; the far lawn
+  and anything right in front of the lens soften, the scale-model look. Off
+  while walking.
+- **Colour** — styled looks use a neutral film curve, so a wall is the colour
+  its style chose; the maquette keeps the filmic curve that bleaches it to
+  paper white.
+- **It builds itself** — walls rise in a sweep when the model opens, furniture
+  settles, the roof comes down (`src/three/rise.ts`); skipped when the system
+  asks for reduced motion.
+- **Zoom goes where you point**, and Snapshot saves exactly what is on screen.
+
+In the plan, clicking a door or window again with its own tool steps it to the
+next size: a door becomes a wide door, then a pair of leaves; a window gains
+lights. Plan and model draw the result the same way.
+
+**Shot** in the bar under the model jumps the camera to Aerial, Street (eye
+level at the entrance), Corner or Top.
+
+## Renders
+
+**Render** (or `R`) runs entirely in the browser: a GPU path tracer
+(`three-gpu-pathtracer`) re-lights the model sample by sample, shown through a
+denoiser. Free, no keys. Pick Screen, 2K or 4K in the render bar; **Save
+image** writes the picture at that size.
 
 ## Sharing
 
