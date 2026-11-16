@@ -318,14 +318,17 @@ function House({ plan }: { plan: ScenePlan }) {
   return (
     <>
       {view === 'dollhouse' && !walking && <RoomPicker floors={floorsGroup} solids={solids} />}
-      <primitive object={wallsGroup} />
-      <primitive object={openingsGroup} />
-      <primitive object={floorsGroup} />
-      <primitive object={furnitureGroup} />
-      {roofGroup && <primitive object={roofGroup} />}
-      {ceilingsGroup && <primitive object={ceilingsGroup} />}
-      {lampsGroup && <primitive object={lampsGroup} />}
-      {decorGroup && <primitive object={decorGroup} />}
+      {/* Keyed by the object itself: a rebuilt layer is unmounted and mounted, there and then. Left to swap
+          in place, react-three-fiber holds the swap back until a later commit whenever the layer is not the
+          last child, and the house would show its previous look. */}
+      <primitive key={wallsGroup.uuid} object={wallsGroup} />
+      <primitive key={openingsGroup.uuid} object={openingsGroup} />
+      <primitive key={floorsGroup.uuid} object={floorsGroup} />
+      <primitive key={furnitureGroup.uuid} object={furnitureGroup} />
+      {roofGroup && <primitive key={roofGroup.uuid} object={roofGroup} />}
+      {ceilingsGroup && <primitive key={ceilingsGroup.uuid} object={ceilingsGroup} />}
+      {lampsGroup && <primitive key={lampsGroup.uuid} object={lampsGroup} />}
+      {decorGroup && <primitive key={decorGroup.uuid} object={decorGroup} />}
       <BounceLight rooms={rooms} open={open} wallHeight={settings.wallHeight} layers={bounceLayers} />
     </>
   );
@@ -465,7 +468,7 @@ function RoomPicker({ floors, solids }: { floors: THREE.Group; solids: THREE.Obj
   if (!hover || !overlay || rendering) return null;
   return (
     <>
-      <primitive object={overlay} />
+      <primitive key={overlay.uuid} object={overlay} />
       {hover.name && (
         <Html position={[hover.centroid.x, 0.3, hover.centroid.y]} center zIndexRange={[5, 0]} style={{ pointerEvents: 'none' }}>
           <div className="room-chip">{hover.name}</div>
@@ -561,8 +564,8 @@ function Site({ plan }: { plan: ScenePlan }) {
   }, [site, ground, invalidate]);
   return (
     <>
-      <primitive object={site.group} />
-      {garden && <primitive object={garden} />}
+      <primitive key={site.group.uuid} object={site.group} />
+      {garden && <primitive key={garden.uuid} object={garden} />}
     </>
   );
 }
@@ -987,6 +990,10 @@ function Walker({ world: walkWorld }: { world: WalkWorld }) {
   const walking = useViewStore((s) => s.walking);
 
   const me = useRef({ x: 0, z: 0, yaw: 0, pitch: 0, keys: new Set<string>() });
+  // Dev-only: where the walker stands and looks, for the demo recorder to steer a smooth walk.
+  useEffect(() => {
+    if (import.meta.env.DEV) (window as unknown as { __walker?: unknown }).__walker = me.current;
+  }, []);
   const world = useRef(walkWorld);
   useEffect(() => {
     world.current = walkWorld;
