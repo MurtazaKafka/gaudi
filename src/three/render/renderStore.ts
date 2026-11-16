@@ -26,13 +26,15 @@ export const RENDER_TUNING = {
   /** Sky (environment) strength relative to the live view's sky light. */
   sky: 1,
   /** Strength of a photographed sky relative to the live view. */
-  skyPhoto: 0.8,
+  skyPhoto: 0.5,
   /** Sun strength when a photographed sky supplies the fill light. */
-  sunWithSky: 1.6,
+  sunWithSky: 1.1,
   /** Exposure multiplier while tracing. */
-  exposure: 1,
+  exposure: 0.9,
   /** Fraction of the canvas's device pixels traced (1 = full retina resolution). */
   scale: 0.75,
+  /** Aperture of the render's lens: lower is a shallower focus (the far lawn and near things soften). */
+  fStop: 7,
   /** Light bounces per path. */
   bounces: 3,
   /** Sun (directional light) strength relative to the live view. The live renderer divides direct light by π; the tracer doesn't. */
@@ -41,11 +43,23 @@ export const RENDER_TUNING = {
   lamp: 1,
   /** 0 = the live view's sky colours, 1 = white sky. */
   neutralSky: 0.3,
+  /** Average brightness of the traced lawn relative to the live lawn's colour. */
+  grass: 1.05,
+  /** Brightest a single sample may be, in light: lucky bounces become white dots above this. */
+  clamp: 6,
+  /** More samples for a frame with foliage or glossy metal, which take longer to settle. */
+  hardSamples: 1.6,
+  /** Strength of a lit window's glow relative to the live view's pane. */
+  windowGlow: 1,
+  /** How high above the horizon (sine of the angle) the sky still fades into the haze: a narrow band, so far hills stand clear of it. */
+  skyHaze: 0.04,
 };
 
 interface RenderState {
   phase: RenderPhase;
   samples: number;
+  /** Samples this render will take (set when it starts: harder scenes take more). */
+  target: number;
   error: string | null;
   /** Bumped to ask the canvas for the current picture. */
   saveNonce: number;
@@ -61,6 +75,7 @@ interface RenderState {
 export const useRenderStore = create<RenderState>((set) => ({
   phase: 'off',
   samples: 0,
+  target: RENDER_SAMPLES,
   error: null,
   saveNonce: 0,
   size: 'screen',

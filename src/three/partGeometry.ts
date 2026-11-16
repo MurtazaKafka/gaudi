@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import type { FurnitureDef, Part } from '../catalog';
+import { withBounce } from './bounce';
 
 const DEG = Math.PI / 180;
 
@@ -107,7 +108,8 @@ export function buildPartMesh(
   const key = materialKey(props);
   let material = cache?.get(key);
   if (!material) {
-    material = new THREE.MeshStandardMaterial(props);
+    // Indoors, lit by the room it stands in (see bounce.ts).
+    material = withBounce(new THREE.MeshStandardMaterial(props));
     cache?.set(key, material);
   }
   const mesh = new THREE.Mesh(shared ? sharedPartGeometry(p) : partGeometry(p), material);

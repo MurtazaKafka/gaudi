@@ -76,3 +76,47 @@ export function applyRise(parts: RiseParts, t: number): void {
 export function calmMotion(): boolean {
   return typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 }
+
+// ---------- edits ----------
+
+/** How long something new takes to arrive after an edit. */
+export const POP_MS = 420;
+
+export interface Pop {
+  object: THREE.Object3D;
+  /** Walls grow up from the floor; furniture and frames drop in and settle. */
+  kind: 'grow' | 'drop';
+  t: number;
+}
+
+/** Keys of everything in a layer (see the builders: walls, openings, furniture carry `userData.key`). */
+export function keysOf(groups: (THREE.Object3D | null)[]): Set<string> {
+  const out = new Set<string>();
+  for (const g of groups) for (const c of g?.children ?? []) if (typeof c.userData.key === 'string') out.add(c.userData.key);
+  return out;
+}
+
+/** What is new in `groups` since `before`. */
+export function newcomers(groups: (THREE.Object3D | null)[], before: Set<string>): THREE.Object3D[] {
+  const out: THREE.Object3D[] = [];
+  for (const g of groups) for (const c of g?.children ?? []) if (typeof c.userData.key === 'string' && !before.has(c.userData.key)) out.push(c);
+  return out;
+}
+
+/** Pose one arrival at `t` (0…1). At 1 it is exactly as built. */
+export function applyPop(p: Pop, t: number): void {
+  const o = p.object;
+  if (t >= 1) {
+    o.scale.setScalar(1);
+    if (p.kind === 'drop') o.position.y = o.userData.restY ?? o.position.y;
+    return;
+  }
+  if (p.kind === 'grow') {
+    o.scale.set(1, Math.max(settle(t, 0.7), 0.0001), 1);
+  } else {
+    if (o.userData.restY === undefined) o.userData.restY = o.position.y;
+    const k = settle(t, 1.4);
+    o.scale.setScalar(Math.max(0.0001, 0.6 + 0.4 * k));
+    o.position.y = o.userData.restY + (1 - Math.min(1, t * 1.6)) * 0.45;
+  }
+}

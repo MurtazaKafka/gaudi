@@ -80,6 +80,106 @@ declines, Gaudí looks the product up through Claude's hosted web search, and
 "paste the details or drop a photo" always works. Search uses the same hosted
 web search. The endpoint only fetches public https hosts.
 
+## The 3D model
+
+Every style except the maquette is built from real assets, all CC0 and all in
+`public/` (about 9 MB, loaded only when the 3D view opens):
+
+- **Materials** — photographed PBR textures from Poly Haven (wood, tile,
+  carpet, plaster, brick, timber, roofing) in `public/textures`, tinted to
+  each style's palette. The list is in `src/three/surfaces.ts`.
+- **Furniture** — low-poly models from the Kenney Furniture Kit in
+  `public/models`, stretched to each catalog item's footprint and recoloured
+  from the style (`src/three/furnitureModels.ts`). Product items from links
+  keep their own Claude-built models.
+- **Light** — two HDR skies from Poly Haven in `public/sky` light the model;
+  the sun follows the time-of-day slider, and from 18:00 the rooms light up
+  from inside. The sky you *see* is drawn (a three-colour gradient that
+  shifts with the hour, `src/three/sky.ts`), so it is calm in every direction.
+- **Built in pieces** — every look except the maquette has its outside walls
+  laid board by board or brick by brick (`src/three/wallPieces.ts`) and its
+  roof laid tile by tile, as slates, shingles, clay barrels or standing-seam
+  metal (`src/three/roofPieces.ts`), each piece a slightly different shade.
+  Ridges and hips get caps, eaves get gutters and downpipes, and the trim a
+  builder would add comes with it: casings, drip caps and sills round doors
+  and windows, corner boards, a stone base course, skirting indoors. What each
+  look is made of is two fields on the style (`siding`, `roofing`).
+- **Planting** — a pot either side of the front door, shrubs gathered at some
+  of the outside corners, and two trees placed behind the house as the camera
+  first sees it, so they frame it rather than hide it (`src/three/plants.ts`).
+  Leaves are small facets lit as one soft clump, the Tiny Glade way.
+- **Windows** — dark glass that catches the sky, with curtains or a blind on
+  the room side (chosen per window); at dusk the room glows behind them, the
+  sill catches the light and a lantern burns by each outside door.
+- **The site** — a gravel strip along the foundation, a slab path that runs
+  out through a picket gate to a lane, post-and-rail fencing, planting beds,
+  three trees that flank the house, hedgerows and copses beyond the fence,
+  and hills fading into the haze (`src/three/grounds.ts`,
+  `src/three/surroundings.ts`, `src/three/plants.ts`).
+- **Lawn** — no photograph: soft ground with slow drifts of tone out to the
+  horizon, and around the house tufts of real blades in one instanced mesh
+  that keep clear of rooms, walls, path and doorstep and thin out with
+  distance (`src/three/garden.ts`). Scene dressing, never in the plan.
+
+### How the live view becomes a picture
+
+Ideas borrowed from Tiny Glade, kept to what a browser's WebGL2 does cheaply
+(`src/three/LivePost.tsx`). The view draws on demand, so none of this costs
+anything while the model is still:
+
+- **Shading where surfaces meet** (three.js's GTAO pass) — walls, furniture
+  and ground sit together instead of floating.
+- **Soft focus** — whatever the camera turns around stays sharp; the far lawn
+  and anything right in front of the lens soften, the scale-model look. Off
+  while walking.
+- **Colour** — styled looks use a neutral film curve, so a wall is the colour
+  its style chose; the maquette keeps the filmic curve that bleaches it to
+  paper white.
+- **It builds itself** — walls rise in a sweep when the model opens, furniture
+  settles, the roof comes down (`src/three/rise.ts`); skipped when the system
+  asks for reduced motion.
+- **Air** — a haze fades the far lawn into the sky's own horizon colour,
+  clouds are painted into the drawn sky, the lawn throws a little green light
+  back up onto the walls, and the clock starts at 15:00, when the light rakes.
+- **Edits arrive** — after the first build, a new wall grows up, a new chair
+  or window drops in and settles; undo brings things back the same way.
+- **Rooms answer the pointer** — in the dollhouse, the room under the pointer
+  lights up and says its name, and a click flies the camera over to it.
+- **Sounds** — a quiet tap, knock or click for single edits, made on the spot
+  with Web Audio; switch them off in settings.
+- **Bounce light** — the live view captures the light inside each room (six
+  tiny pictures from the middle of the room, reduced to a few numbers) and
+  lights indoor surfaces with it instead of the open sky, so floors warm the
+  walls, corners and hallways sit darker, and ceilings shade the rooms when
+  walking (`src/three/BounceLight.tsx`, `src/three/bounce.ts`). It is captured
+  again when the house, the hour or the view changes, never while idle.
+- **Room details** — rugs, framed pictures, mirrors, lamps, cushions and
+  throws, books, towels, a bench by the front door: placed around the plan's
+  own furniture, doors and windows, the same every time, never part of the
+  plan (`src/three/decor.ts`). Style → Room details turns them off.
+- **A photographer's camera** — from outside the camera is kept level and the
+  picture shifted, so walls stand upright (Shot → Straight verticals); Shot
+  also picks a Wide, Normal or Long lens. A soft vignette in both the live
+  view and renders; renders trace through a real aperture focused on the
+  house (`src/three/lens.ts`).
+- **Zoom goes where you point**, and Snapshot saves exactly what is on screen.
+
+In the plan, clicking a door or window again with its own tool steps it to the
+next size: a door becomes a wide door, then a pair of leaves; a window gains
+lights. Plan and model draw the result the same way.
+
+**Shot** in the bar under the model jumps the camera to Aerial, Street (eye
+level at the entrance), Corner or Top.
+
+## Renders
+
+**Render** (or `R`) runs entirely in the browser: a GPU path tracer
+(`three-gpu-pathtracer`) re-lights the model sample by sample, shown through a
+denoiser. Free, no keys. Pick Screen, 2K or 4K in the render bar; **Save
+image** writes the picture at that size. The live view's haze is laid over
+the traced picture from a depth image of the same view, since the tracer has
+no fog of its own.
+
 ## Sharing
 
 **Share** (top bar) publishes the current plan at `#/p/{id}` — a link anyone

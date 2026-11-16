@@ -4,6 +4,7 @@
  * (No three.js import here: the app shell may read this store.)
  */
 import { create } from 'zustand';
+import type { Lens } from './lens';
 
 export type SceneView = 'dollhouse' | 'exterior' | 'walk';
 export type OrbitView = Exclude<SceneView, 'walk'>;
@@ -20,6 +21,8 @@ export const SHOTS: readonly { id: Shot; label: string; hint: string }[] = [
 export const SUN_MIN = 6;
 export const SUN_MAX = 20;
 export const SUN_NOON = 12;
+/** Where the clock starts: mid-afternoon, when the light rakes across the walls instead of falling flat from overhead. */
+export const SUN_DEFAULT = 15;
 
 export interface CameraPose {
   position: [number, number, number];
@@ -45,6 +48,12 @@ interface ViewState {
   shotNonce: number;
   /** Which way the house faces (unit vector in plan x/z, out of the front door). */
   front: [number, number];
+  /** The lens on the orbit camera. */
+  lens: Lens;
+  /** Keep upright walls upright from outside (shift the lens instead of tilting the camera). */
+  straight: boolean;
+  /** Dress the rooms in the 3D view (rugs, pictures, lamps…). Never part of the plan. */
+  details: boolean;
 
   setView: (view: SceneView) => void;
   setWalking: (walking: boolean) => void;
@@ -55,18 +64,24 @@ interface ViewState {
   resetView: () => void;
   takeShot: (shot: Shot) => void;
   setFront: (front: [number, number]) => void;
+  setLens: (lens: Lens) => void;
+  setStraight: (straight: boolean) => void;
+  setDetails: (details: boolean) => void;
 }
 
 export const useViewStore = create<ViewState>((set) => ({
   view: 'dollhouse',
   orbitView: 'dollhouse',
   walking: false,
-  sunHour: SUN_NOON,
+  sunHour: SUN_DEFAULT,
   pose: null,
   resetNonce: 0,
   shot: 'aerial',
   shotNonce: 0,
   front: [0, 1],
+  lens: 'normal',
+  straight: true,
+  details: true,
 
   setView: (view) =>
     set((s) => ({
@@ -89,6 +104,9 @@ export const useViewStore = create<ViewState>((set) => ({
       walking: false,
     })),
   setFront: (front) => set((s) => (s.front[0] === front[0] && s.front[1] === front[1] ? s : { front })),
+  setLens: (lens) => set({ lens }),
+  setStraight: (straight) => set({ straight }),
+  setDetails: (details) => set({ details }),
 }));
 
 /** "6:30", "14:00" — plain 24-hour clock. */

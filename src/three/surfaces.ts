@@ -28,6 +28,12 @@ export interface TextureInfo {
   size: number;
   /** Average colour of the photo; a surface's own colour is expressed relative to it. */
   avg: string;
+  /** How much of the photo's light-and-dark to keep (1 = all of it): a stain-blotched photo is calmed toward its average. */
+  contrast?: number;
+  /** Strength of the photo's relief (normal map), 1 = as photographed. */
+  relief?: number;
+  /** How far the tint may lift the photo (default 2.4): a grey photo of a pale wall needs more to reach its colour. */
+  maxTint?: number;
 }
 
 export const TEXTURES: Record<TextureId, TextureInfo> = {
@@ -39,7 +45,8 @@ export const TEXTURES: Record<TextureId, TextureInfo> = {
   concrete: { source: 'concrete_pavement', size: 1.8, avg: '#7f7466' },
   carpet: { source: 'curly_teddy_natural', size: 0.34, avg: '#e9d3bb' },
   plaster: { source: 'white_stucco', size: 2.0, avg: '#d7d3d0' },
-  render: { source: 'white_plaster_02', size: 1.0, avg: '#8e877b' },
+  // A grey, stain-mottled photo: laid big, calmed, and lifted all the way to the wall's own colour, so it reads as fresh lime render.
+  render: { source: 'white_plaster_02', size: 3.5, avg: '#8e877b', contrast: 0.4, relief: 0.55, maxTint: 3.4 },
   brick: { source: 'red_brick_03', size: 1.0, avg: '#6a544c' },
   timber: { source: 'wood_planks', size: 1.5, avg: '#795939' },
   charred: { source: 'black_painted_planks', size: 1.6, avg: '#1a1b20' },
@@ -56,17 +63,23 @@ const channel = (hex: string, i: number): number => {
   return Math.pow(Number.isFinite(v) ? v : 1, 2.2); // to linear light
 };
 
+/** A texture's average colour in linear light, for calming a photo toward it in a shader. */
+export function averageLinear(id: TextureId): [number, number, number] {
+  const avg = TEXTURES[id].avg;
+  return [channel(avg, 0), channel(avg, 1), channel(avg, 2)];
+}
+
 /**
  * The multiplier (linear RGB) that makes a photo read as `wanted` overall
  * while keeping its grain: wanted ÷ the photo's average, kept within bounds so
  * a dark photo is never blown out and a pale one never crushed.
  */
 export function tintFor(wanted: string, id: TextureId): [number, number, number] {
-  const avg = TEXTURES[id].avg;
+  const { avg, maxTint = 2.4 } = TEXTURES[id];
   const out: number[] = [];
   for (let i = 0; i < 3; i++) {
     const ratio = channel(wanted, i) / Math.max(0.004, channel(avg, i));
-    out.push(Math.min(2.4, Math.max(0.2, ratio)));
+    out.push(Math.min(maxTint, Math.max(0.2, ratio)));
   }
   return out as [number, number, number];
 }

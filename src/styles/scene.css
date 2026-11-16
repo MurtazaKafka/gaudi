@@ -140,3 +140,18 @@
   color: var(--ink-soft);
   background: var(--paper);
 }
+
+/* The name of the room under the pointer, in the dollhouse. */
+.room-chip {
+  padding: 4px 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--ink);
+  background: rgba(252, 251, 248, 0.94);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: 0 2px 10px rgba(33, 31, 27, 0.1);
+}

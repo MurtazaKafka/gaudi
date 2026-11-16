@@ -20,6 +20,7 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { FullScreenQuad, Pass } from 'three/examples/jsm/postprocessing/Pass.js';
 import { livePost, POST_TUNING } from './postState';
 import { useViewStore } from './viewStore';
+import { straighten } from './lens';
 
 const COPY_VERTEX = /* glsl */ `
   varying vec2 vUv;
@@ -143,14 +144,17 @@ class FocusPass extends Pass {
               : smoothstep(band, band + 1.6, off);
           }
 
-          void main() {
+          // A lens darkens a little toward its corners.
+          float vignette(vec2 uv) {
+            vec2 d = uv - 0.5;
+            return 1.0 - 0.22 * smoothstep(0.32, 0.85, length(d * vec2(1.0, 0.82)) * 1.25);
+          }
+
+          vec4 focused() {
             vec4 centre = texture2D(tDiffuse, vUv);
             float dist = distanceAt(vUv);
             float radius = (isSky(vUv) ? 0.35 : softness(dist)) * maxBlur;
-            if (radius < 0.5) {
-              gl_FragColor = centre;
-              return;
-            }
+            if (radius < 0.5) return centre;
             vec3 sum = centre.rgb;
             float weight = 1.0;
             for (int i = 1; i <= TAPS; i++) {
@@ -163,7 +167,12 @@ class FocusPass extends Pass {
               sum += texture2D(tDiffuse, uv).rgb * w;
               weight += w;
             }
-            gl_FragColor = vec4(sum / weight, centre.a);
+            return vec4(sum / weight, centre.a);
+          }
+
+          void main() {
+            vec4 c = focused();
+            gl_FragColor = vec4(c.rgb * vignette(vUv), c.a);
           }
         `,
         depthTest: false,
@@ -319,7 +328,13 @@ export function LivePost() {
           p.ratio = ratio;
           p.composer.setPixelRatio(ratio);
         }
-        p.composer.render();
+        // From outside, walls stand upright: level the camera and shift the picture for this frame only.
+        const restore = view.view === 'exterior' && view.straight && !view.walking && target ? straighten(cam, target) : null;
+        try {
+          p.composer.render();
+        } finally {
+          restore?.();
+        }
       } catch {
         // A device that can't run the passes still gets its model.
         failed.current = true;

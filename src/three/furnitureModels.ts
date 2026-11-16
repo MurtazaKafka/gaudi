@@ -12,6 +12,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { BuiltinKind, FurnitureDef } from '../catalog';
 import type { FurniturePalette } from './styles';
+import { withBounce } from './bounce';
 
 interface Piece {
   file: string;
@@ -168,6 +169,7 @@ function materialFor(
       m.emissiveIntensity = 0.8;
     }
     m.name = `furniture-${role}`;
+    withBounce(m);
     cache.set(key, m);
   }
   return m;

@@ -7,8 +7,9 @@ import type { RoofKind } from '../types';
 import { chooseRoof, chooseStyle } from './lookActions';
 import { effectiveRoof, ROOF_LABELS, STYLES, styleById } from './styles';
 import type { HouseStyle } from './styles';
-import { formatHour, SUN_MAX, SUN_MIN, useViewStore, SHOTS } from './viewStore';
+import { formatHour, SUN_DEFAULT, SUN_MAX, SUN_MIN, useViewStore, SHOTS } from './viewStore';
 import type { SceneView } from './viewStore';
+import { LENSES } from './lens';
 
 const VIEWS: { id: SceneView; label: string; key: string; title: string }[] = [
   { id: 'dollhouse', label: 'Dollhouse', key: '1', title: 'Look in from above, roof off' },
@@ -40,7 +41,10 @@ const Caret = () => (
 export function SceneBar({ onSnapshot }: { onSnapshot: () => void }) {
   const view = useViewStore((s) => s.view);
   const walking = useViewStore((s) => s.walking);
+  const lens = useViewStore((s) => s.lens);
+  const straight = useViewStore((s) => s.straight);
   const sunHour = useViewStore((s) => s.sunHour);
+  const details = useViewStore((s) => s.details);
   const look = usePlanStore((s) => s.look);
   const readOnly = useUiStore((s) => s.readOnly);
   const style = styleById(look?.style);
@@ -106,6 +110,16 @@ export function SceneBar({ onSnapshot }: { onSnapshot: () => void }) {
                 </span>
               </button>
             ))}
+            <button
+              role="menuitemcheckbox"
+              aria-checked={details}
+              className={`menu-item ${details ? 'scene-current' : ''}`}
+              title="Rugs, pictures, lamps, cushions and books: dressing for the 3D view only, never part of the plan"
+              onClick={() => useViewStore.getState().setDetails(!details)}
+            >
+              Room details
+              <span className="menu-meta">{details ? 'on' : 'off'}</span>
+            </button>
           </div>
         )}
       </div>
@@ -169,7 +183,7 @@ export function SceneBar({ onSnapshot }: { onSnapshot: () => void }) {
           value={sunHour}
           onChange={(e) => useViewStore.getState().setSunHour(parseFloat(e.target.value))}
           onPointerUp={(e) => e.currentTarget.blur()}
-          onDoubleClick={() => useViewStore.getState().setSunHour(12)}
+          onDoubleClick={() => useViewStore.getState().setSunHour(SUN_DEFAULT)}
         />
         <span className="scene-sun-time mono">{formatHour(sunHour)}</span>
       </label>
@@ -224,6 +238,29 @@ export function SceneBar({ onSnapshot }: { onSnapshot: () => void }) {
                 <span className="menu-meta">{s.hint}</span>
               </button>
             ))}
+            <div className="menu-label">Lens</div>
+            {LENSES.map((l) => (
+              <button
+                key={l.id}
+                role="menuitemradio"
+                aria-checked={lens === l.id}
+                className={`menu-item ${lens === l.id ? 'scene-current' : ''}`}
+                onClick={() => useViewStore.getState().setLens(l.id)}
+              >
+                {l.label}
+                <span className="menu-meta">{l.hint}</span>
+              </button>
+            ))}
+            <button
+              role="menuitemcheckbox"
+              aria-checked={straight}
+              className={`menu-item ${straight ? 'scene-current' : ''}`}
+              title="From outside, keep walls upright: the camera stays level and the picture shifts, as architectural photographers do"
+              onClick={() => useViewStore.getState().setStraight(!straight)}
+            >
+              Straight verticals
+              <span className="menu-meta">{straight ? 'on' : 'off'}</span>
+            </button>
           </div>
         )}
       </div>

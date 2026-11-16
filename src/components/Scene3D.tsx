@@ -2,7 +2,7 @@ import { Component, useCallback, useEffect, useLayoutEffect, useMemo, useRef, us
 import type { ReactNode } from 'react';
 import * as THREE from 'three';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { OrbitControls } from '@react-three/drei';
+import { Html, OrbitControls } from '@react-three/drei';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import { usePlanStore } from '../store';
 import { useUiStore } from '../uiStore';
@@ -41,14 +41,20 @@ import { LivePost } from '../three/LivePost';
 import { livePost } from '../three/postState';
 import { onTextureLoad } from '../three/textureSet';
 import { onModelLoad } from '../three/furnitureModels';
-import { backdropFor, onSkyLoad, skyFor, skyIdFor } from '../three/sky';
-import { buildLawn, disposeGarden } from '../three/garden';
-import { applyRise, calmMotion, RISE_MS } from '../three/rise';
+import { backdropFor, horizonFor, onSkyLoad, skyFor, skyIdFor, zenithFor } from '../three/sky';
+import { buildLawn, disposeGarden, lawnColor } from '../three/garden';
+import { buildPlanting } from '../three/plants';
+import { buildDecor } from '../three/decor';
+import { BounceLight } from '../three/BounceLight';
+import { buildGrounds } from '../three/grounds';
+import { applyPop, applyRise, calmMotion, keysOf, newcomers, POP_MS, RISE_MS } from '../three/rise';
+import type { Pop } from '../three/rise';
 import { RenderOverlay } from '../three/render/RenderOverlay';
 import { useRenderStore } from '../three/render/renderStore';
 import { effectiveRoof, STYLES, styleById } from '../three/styles';
-import { LAMP_DISTANCE, sunState, mixHex, sunPhase } from '../three/sun';
+import { LAMP_DISTANCE, mixHex, sunState, sunPhase } from '../three/sun';
 import { useViewStore } from '../three/viewStore';
+import { LENS_FOV, lensReach } from '../three/lens';
 import type { CameraPose } from '../three/viewStore';
 import {
   BODY_RADIUS,
@@ -63,7 +69,6 @@ import type { WalkWorld } from '../three/walk';
 import '../styles/scene.css';
 import '../styles/roofs.css';
 
-const ORBIT_FOV = 42;
 const WALK_FOV = 68;
 
 /** The slice of OrbitControls this file drives. */
@@ -116,10 +121,11 @@ function planBounds(walls: Wall[]): Bounds {
   };
 }
 
-/** The camera that looks down into the house from the south-east. */
+/** The camera that looks down into the house from the south-east, as far back as the lens needs to frame it. */
 function defaultPose(b: Bounds, fitNonce: number): CameraPose {
+  const k = b.radius * lensReach(useViewStore.getState().lens);
   return {
-    position: [b.x + b.radius * 1.4, b.radius * 2.3, b.z + b.radius * 1.8],
+    position: [b.x + k * 1.4, k * 2.3, b.z + k * 1.8],
     target: [b.x, 0, b.z],
     fitNonce,
   };
@@ -178,7 +184,7 @@ function House({ plan }: { plan: ScenePlan }) {
   const kit = useMemo(() => materialKit(style), [style]);
 
   const wallsGroup = useMemo(() => buildWalls(model, kit, true), [model, kit]);
-  const openingsGroup = useMemo(() => buildOpenings(model.openings, kit), [model, kit]);
+  const openingsGroup = useMemo(() => buildOpenings(model.openings, kit, model.pieces), [model, kit]);
   const floorsGroup = useMemo(() => buildFloors(rooms, roomNames ?? {}, kit, open), [rooms, roomNames, kit, open]);
   // Furniture models arrive after the first build; build again when one does.
   const [modelsVersion, setModelsVersion] = useState(0);
@@ -208,11 +214,38 @@ function House({ plan }: { plan: ScenePlan }) {
   // Evening: the rooms light up from inside.
   const sunHour = useViewStore((s) => s.sunHour);
   const lit = lampsOn(sunHour) && style.id !== 'maquette';
+  // The glowing window panes only make sense seen from outside, with the roof on.
+  const panes = view === 'exterior' && !walking;
   const lampsGroup = useMemo(
-    () => (lit ? buildRoomLamps(rooms, settings.wallHeight, open) : null),
-    [lit, rooms, settings.wallHeight, open],
+    () => (lit ? buildRoomLamps(rooms, settings.wallHeight, open, model.openings, model.pieces, panes) : null),
+    [lit, rooms, settings.wallHeight, open, model, panes],
   );
   useDisposal(lampsGroup);
+
+  // Rugs, pictures, lamps and the rest: the 3D view dresses the rooms; the plan never holds them.
+  const details = useViewStore((s) => s.details);
+  const decorGroup = useMemo(
+    () =>
+      details && style.id !== 'maquette'
+        ? buildDecor({
+            rooms,
+            roomNames: roomNames ?? {},
+            furniture: Array.isArray(furniture) ? furniture : [],
+            openings: model.openings,
+            pieces: model.pieces,
+            settings,
+            style,
+            open,
+            evening: lit,
+          })
+        : null,
+    [details, style, rooms, roomNames, furniture, model, settings, open, lit],
+  );
+  useDisposal(decorGroup);
+  const bounceLayers = useMemo(
+    () => [wallsGroup, floorsGroup, furnitureGroup, openingsGroup, roofGroup, ceilingsGroup, lampsGroup, decorGroup],
+    [wallsGroup, floorsGroup, furnitureGroup, openingsGroup, roofGroup, ceilingsGroup, lampsGroup, decorGroup],
+  );
 
   // The house builds itself when it is first shown, and again when the plan is replaced.
   const fitNonce = useUiStore((s) => s.fitNonce);
@@ -241,6 +274,40 @@ function House({ plan }: { plan: ScenePlan }) {
     if (rise.current < 1) invalidate();
   });
 
+  // After the first build, anything new — a wall drawn, a chair placed, an undo bringing something back —
+  // arrives on its own instead of blinking in.
+  const seen = useRef<Set<string> | null>(null);
+  const pops = useRef<Pop[]>([]);
+  useLayoutEffect(() => {
+    const layers = [wallsGroup, openingsGroup, furnitureGroup];
+    const before = seen.current;
+    seen.current = keysOf(layers);
+    // The first build, and a plan swapped in whole, rise as a house instead (see above).
+    if (!before || rise.current < 1 || calmMotion()) return;
+    const fresh = newcomers(layers, before);
+    // Hundreds of new things is a new plan, not an edit.
+    if (fresh.length === 0 || fresh.length > 60) return;
+    const t = performance.now();
+    for (const object of fresh) {
+      const pop: Pop = { object, kind: object.parent === wallsGroup ? 'grow' : 'drop', t };
+      applyPop(pop, 0);
+      pops.current.push(pop);
+    }
+    getThree().invalidate();
+  }, [wallsGroup, openingsGroup, furnitureGroup, getThree]);
+  useFrame(({ invalidate }) => {
+    if (pops.current.length === 0) return;
+    const now = performance.now();
+    pops.current = pops.current.filter((p) => {
+      const t = (now - p.t) / POP_MS;
+      applyPop(p, t);
+      return t < 1;
+    });
+    invalidate();
+  });
+
+  const solids = useMemo(() => [wallsGroup, furnitureGroup, openingsGroup], [wallsGroup, furnitureGroup, openingsGroup]);
+
   useDisposal(wallsGroup);
   useDisposal(openingsGroup);
   useDisposal(floorsGroup);
@@ -250,6 +317,7 @@ function House({ plan }: { plan: ScenePlan }) {
 
   return (
     <>
+      {view === 'dollhouse' && !walking && <RoomPicker floors={floorsGroup} solids={solids} />}
       <primitive object={wallsGroup} />
       <primitive object={openingsGroup} />
       <primitive object={floorsGroup} />
@@ -257,6 +325,152 @@ function House({ plan }: { plan: ScenePlan }) {
       {roofGroup && <primitive object={roofGroup} />}
       {ceilingsGroup && <primitive object={ceilingsGroup} />}
       {lampsGroup && <primitive object={lampsGroup} />}
+      {decorGroup && <primitive object={decorGroup} />}
+      <BounceLight rooms={rooms} open={open} wallHeight={settings.wallHeight} layers={bounceLayers} />
+    </>
+  );
+}
+
+// ---------- pointing at rooms ----------
+
+interface RoomInfo {
+  key: string;
+  name: string;
+  polygon: { x: number; y: number }[];
+  centroid: { x: number; y: number };
+}
+
+/**
+ * In the dollhouse: the room under the pointer lights up and says its name;
+ * a click flies the camera over to it. Looking only — nothing in the plan changes.
+ */
+function RoomPicker({ floors, solids }: { floors: THREE.Group; solids: THREE.Object3D[] }) {
+  const get = useThree((s) => s.get);
+  const [hover, setHover] = useState<RoomInfo | null>(null);
+  const flight = useRef<{ p0: THREE.Vector3; t0: THREE.Vector3; p1: THREE.Vector3; t1: THREE.Vector3; start: number } | null>(null);
+  const rendering = useRenderStore((s) => s.phase !== 'off');
+
+  const overlay = useMemo(() => {
+    if (!hover) return null;
+    const shape = new THREE.Shape(hover.polygon.map((p) => new THREE.Vector2(p.x, p.y)));
+    const geo = new THREE.ShapeGeometry(shape);
+    geo.rotateX(Math.PI / 2);
+    const mat = new THREE.MeshBasicMaterial({ color: '#c14e33', transparent: true, opacity: 0.16, depthWrite: false, side: THREE.DoubleSide });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.y = 0.025;
+    mesh.renderOrder = 4;
+    mesh.name = 'room-hover';
+    mesh.raycast = () => {};
+    return mesh;
+  }, [hover]);
+  useEffect(
+    () => () => {
+      overlay?.geometry.dispose();
+      (overlay?.material as THREE.Material | undefined)?.dispose();
+    },
+    [overlay],
+  );
+
+  useEffect(() => {
+    if (rendering) return;
+    const el = get().gl.domElement;
+    const ray = new THREE.Raycaster();
+    const ndc = new THREE.Vector2();
+    let down: { x: number; y: number } | null = null;
+    let frame = 0;
+    let last: RoomInfo | null = null;
+    const pick = (e: PointerEvent | MouseEvent): RoomInfo | null => {
+      const rect = el.getBoundingClientRect();
+      ndc.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+      ray.setFromCamera(ndc, get().camera);
+      // The first thing the pointer meets: a wall or a chair in front of a floor hides it.
+      const hit = ray.intersectObjects([floors, ...solids], true).find((h) => h.object.visible && h.object.name !== 'edges');
+      const info = hit?.object.userData.room as RoomInfo | undefined;
+      return info ?? null;
+    };
+    const onMove = (e: PointerEvent) => {
+      if (e.buttons !== 0) return;
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const info = pick(e);
+        if (info?.key !== last?.key) {
+          last = info;
+          setHover(info);
+          el.style.cursor = info ? 'pointer' : '';
+          get().invalidate();
+        }
+      });
+    };
+    const onLeave = () => {
+      last = null;
+      setHover(null);
+      el.style.cursor = '';
+      get().invalidate();
+    };
+    const onDown = (e: PointerEvent) => {
+      down = e.button === 0 ? { x: e.clientX, y: e.clientY } : null;
+    };
+    const onUp = (e: PointerEvent) => {
+      const from = down;
+      down = null;
+      if (!from || Math.hypot(e.clientX - from.x, e.clientY - from.y) > 5) return;
+      const info = pick(e);
+      if (!info) return;
+      const { camera, controls } = get();
+      const orbit = controls as unknown as OrbitLike | null;
+      if (!orbit) return;
+      // Same angle on the house, closer in, centred on the room.
+      let r = 0;
+      for (const p of info.polygon) r = Math.max(r, Math.hypot(p.x - info.centroid.x, p.y - info.centroid.y));
+      const t1 = new THREE.Vector3(info.centroid.x, 0.4, info.centroid.y);
+      const dir = camera.position.clone().sub(orbit.target).normalize();
+      if (dir.y < 0.75) dir.setY(0.75).normalize();
+      const p1 = t1.clone().addScaledVector(dir, Math.min(16, Math.max(4.5, r * 2.5 + 2)));
+      flight.current = { p0: camera.position.clone(), t0: orbit.target.clone(), p1, t1, start: performance.now() };
+      get().invalidate();
+    };
+    el.addEventListener('pointermove', onMove);
+    el.addEventListener('pointerleave', onLeave);
+    el.addEventListener('pointerdown', onDown);
+    el.addEventListener('pointerup', onUp);
+    return () => {
+      cancelAnimationFrame(frame);
+      el.removeEventListener('pointermove', onMove);
+      el.removeEventListener('pointerleave', onLeave);
+      el.removeEventListener('pointerdown', onDown);
+      el.removeEventListener('pointerup', onUp);
+      el.style.cursor = '';
+    };
+  }, [get, floors, solids, rendering]);
+
+  useFrame(({ camera, controls, invalidate }) => {
+    const f = flight.current;
+    const orbit = controls as unknown as OrbitLike | null;
+    if (!f || !orbit) return;
+    const t = Math.min(1, (performance.now() - f.start) / 700);
+    const k = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+    camera.position.lerpVectors(f.p0, f.p1, k);
+    orbit.target.lerpVectors(f.t0, f.t1, k);
+    orbit.update();
+    if (t >= 1) {
+      flight.current = null;
+      useViewStore.getState().setPose({
+        position: [camera.position.x, camera.position.y, camera.position.z],
+        target: [orbit.target.x, orbit.target.y, orbit.target.z],
+        fitNonce: useUiStore.getState().fitNonce,
+      });
+    } else invalidate();
+  });
+
+  if (!hover || !overlay || rendering) return null;
+  return (
+    <>
+      <primitive object={overlay} />
+      {hover.name && (
+        <Html position={[hover.centroid.x, 0.3, hover.centroid.y]} center zIndexRange={[5, 0]} style={{ pointerEvents: 'none' }}>
+          <div className="room-chip">{hover.name}</div>
+        </Html>
+      )}
     </>
   );
 }
@@ -309,21 +523,35 @@ function Site({ plan }: { plan: ScenePlan }) {
     }
     if (sitePlan.path) keepOut.push(sitePlan.path);
     if (sitePlan.step) keepOut.push(sitePlan.step);
-    return buildLawn({
+    // Gravel along the foundation, a slab path, a fence round the lot, and the land rolling away beyond it.
+    const look = styleById(styleId);
+    const grounds = buildGrounds(sitePlan, {
+      gravel: mixHex('#a59e92', look.ground, 0.15),
+      stone: mixHex('#cfc9bd', look.ground, 0.2),
+      fence: mixHex('#8d7a64', look.trim, 0.12),
+    });
+    keepOut.push(...grounds.gravel);
+    const lawn = buildLawn({
+      height: grounds.height,
       x,
       z,
       radius,
-      color: mixHex('#7f9a58', styleById(styleId).ground, 0.2),
+      color: lawnColor(styleById(styleId).ground),
       keepOut,
       gap: half + 0.04,
       margin: half + 0.6,
     });
+    const planting = buildPlanting(sitePlan, { x, y: z });
+    if (planting) lawn.add(planting);
+    if (grounds.mesh) lawn.add(grounds.mesh);
+    return lawn;
   }, [styled, sitePlan, plan.bounds, styleId, rooms, walls, settings.wallThickness]);
   useEffect(() => () => disposeGarden(garden), [garden]);
   useLayoutEffect(() => {
     // The lawn replaces the plot's flat tone.
     site.group.traverse((o) => {
-      if (o.name === 'lot' || o.name === 'lot-edge') o.visible = !styled;
+      // …and the slab path replaces the flat one.
+      if (o.name === 'lot' || o.name === 'lot-edge' || o.name === 'path') o.visible = !styled;
     });
   }, [site, styled]);
   useLayoutEffect(() => {
@@ -344,6 +572,27 @@ function Site({ plan }: { plan: ScenePlan }) {
 /** How strongly the photographed sky lights the model, and which way a positive turn rotates it. */
 const SKY_LIGHT = 0.85;
 const SKY_TURN_SIGN = -1;
+/** How much darker the picture is with the sun on the horizon (exposure 1 − this). */
+const DUSK_EXPOSURE_DROP = 0.35;
+/** How far the haze leans from the horizon colour toward the sky overhead. */
+const HAZE_TOWARD_ZENITH = 0.15;
+
+/** The orbit controls' pivot, if they are mounted. */
+function orbitTarget(controls: unknown): THREE.Vector3 | null {
+  const t = (controls as { target?: unknown } | null)?.target;
+  return t instanceof THREE.Vector3 ? t : null;
+}
+
+/**
+ * Haze measured from the house, not the camera: it starts a little past the house however far
+ * away the camera stands, and thickens over the land beyond. Only uniforms change, never shaders.
+ */
+function fitFog(fog: THREE.Fog, camera: THREE.Camera, target: THREE.Vector3 | null, radius: number): void {
+  const r = Math.max(radius, 6);
+  const dist = target ? camera.position.distanceTo(target) : r * 3;
+  fog.near = dist + r * 1.5;
+  fog.far = fog.near + r * 14;
+}
 
 function Lights({ bounds }: { bounds: Bounds }) {
   const sunHour = useViewStore((s) => s.sunHour);
@@ -379,8 +628,8 @@ function Lights({ bounds }: { bounds: Bounds }) {
     scene.environment = sky.texture;
     scene.environmentRotation.set(0, turn, 0);
     // As the sun gets low the sky gives less light, so lamps and the low sun carry the evening.
-    const dim = 1 - 0.6 * Math.pow(Math.abs(sunPhase(sunHour)), 3);
-    scene.environmentIntensity = SKY_LIGHT * style.ambient * (sky.id === 'dusk' ? 1.5 : 1) * dim;
+    const dim = 1 - 0.72 * Math.pow(Math.abs(sunPhase(sunHour)), 2.2);
+    scene.environmentIntensity = SKY_LIGHT * style.ambient * dim;
     if (showSky) {
       // Behind the house: a drawn sky, calm in every direction. The photograph only lights.
       scene.background = backdropFor(sunHour);
@@ -396,14 +645,60 @@ function Lights({ bounds }: { bounds: Bounds }) {
     };
   }, [getThree, sky, showSky, sunAzimuth, style.ambient, sunHour]);
 
+  // Evening: the whole picture settles a little darker, so the lit windows and the low sun carry it.
+  // Gentle on purpose: the house must stay readable. (The path tracer scales from whatever this is.)
+  const styled = style.id !== 'maquette';
+  const exposure = styled ? 1 - DUSK_EXPOSURE_DROP * Math.pow(Math.abs(sunPhase(sunHour)), 2) : 1;
+  useLayoutEffect(() => {
+    const { gl, invalidate } = getThree();
+    const before = gl.toneMappingExposure;
+    gl.toneMappingExposure = exposure;
+    invalidate();
+    return () => {
+      gl.toneMappingExposure = before;
+      invalidate();
+    };
+  }, [getThree, exposure]);
+
+  // Haze: the far lawn fades into the sky's own horizon colour, so the ground never ends at a hard line.
+  // One Fog for the life of the view: materials compile against the fog object itself, so swapping it
+  // while the sun slider moves would rebuild every shader. Only its numbers change (here and as the camera moves).
+  const fog = useMemo(() => new THREE.Fog('#ffffff', 1, 2), []);
+  useLayoutEffect(() => {
+    if (!styled) return;
+    const { scene, invalidate } = getThree();
+    scene.fog = fog;
+    invalidate();
+    return () => {
+      if (scene.fog === fog) scene.fog = null;
+      invalidate();
+    };
+  }, [getThree, styled, fog]);
+  const hazeColor = showSky ? horizonFor(sunHour) : sun.background;
+  // Toward the sky overhead, a touch cooler and darker than the horizon: distance, not a fog wall.
+  // (Over the dollhouse's flat backdrop the haze must match it exactly.)
+  const hazeTop = showSky ? zenithFor(sunHour) : null;
+  useLayoutEffect(() => {
+    const { camera, controls, invalidate } = getThree();
+    fog.color.set(hazeColor);
+    if (hazeTop) fog.color.lerp(new THREE.Color(hazeTop), HAZE_TOWARD_ZENITH);
+    fitFog(fog, camera, orbitTarget(controls), radius);
+    invalidate();
+  }, [getThree, fog, hazeColor, hazeTop, radius]);
+
+  const roomLight = sky !== null && view === 'dollhouse';
+
   return (
     <>
       {!showSky && <color attach="background" args={[sun.background]} />}
       {/* warm key light + soft sky fill: at noon, the maquette under its studio lamp */}
+      {/* Light thrown back up off the ground: green off a lawn, onto the lower walls and eaves. */}
+      {/* Under a photographed sky it only adds the lawn's bounce (the sky does the shade). Looking down
+          into the rooms it is a warm room light instead, so white plaster reads warm, not slate. */}
       <hemisphereLight
-        color={sun.hemiSky}
-        groundColor={sun.hemiGround}
-        intensity={sky ? sun.hemiIntensity * 0.15 : sun.hemiIntensity}
+        color={roomLight ? mixHex(sun.hemiSky, '#fff3e2', 0.8) : sun.hemiSky}
+        groundColor={roomLight ? mixHex(style.floors.living.color, '#efe6d8', 0.6) : styled ? lawnColor(style.ground) : sun.hemiGround}
+        intensity={sky ? sun.hemiIntensity * (roomLight ? 0.5 : 0.17) : sun.hemiIntensity}
       />
       <primitive object={target} position={[x, 0, z]} />
       <directionalLight
@@ -419,10 +714,14 @@ function Lights({ bounds }: { bounds: Bounds }) {
       >
         <orthographicCamera attach="shadow-camera" args={[-span, span, span, -span, 0.5, radius * 8]} />
       </directionalLight>
-      <directionalLight
-        position={[x - radius * 1.6, radius * 1.2, z + radius * 1.8]}
-        intensity={sun.fillIntensity}
-      />
+      {/* The maquette's studio fill. The styled looks have none: a shadowless light from a fixed side lit
+          every wall facing the camera as if in sun, and the house lost its shape. */}
+      {!styled && (
+        <directionalLight
+          position={[x - radius * 1.6, radius * 1.2, z + radius * 1.8]}
+          intensity={sun.fillIntensity}
+        />
+      )}
       {style.id === 'maquette' && (
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[x, -0.002, z]} receiveShadow>
         <circleGeometry args={[Math.max(radius * 5, 24), 64]} />
@@ -435,6 +734,54 @@ function Lights({ bounds }: { bounds: Bounds }) {
 }
 
 // ---------- orbit camera ----------
+
+/** True while `o` hangs somewhere under `scene`. */
+function inScene(o: THREE.Object3D, scene: THREE.Object3D): boolean {
+  for (let p: THREE.Object3D | null = o; p; p = p.parent) if (p === scene) return true;
+  return false;
+}
+
+interface Sphere {
+  x: number;
+  y: number;
+  z: number;
+  r: number;
+}
+
+/** The planting mesh, which lists its tree crowns and shrubs as spheres (userData.spheres). */
+function findPlanting(scene: THREE.Object3D): THREE.Object3D | null {
+  let found: THREE.Object3D | null = null;
+  scene.traverse((o) => {
+    if (!found && o.name === 'planting' && Array.isArray(o.userData.spheres)) found = o;
+  });
+  return found;
+}
+
+/** Room left between the camera and a crown or a shrub, in metres. */
+const PLANT_CLEARANCE = 0.5;
+const plantCentre = new THREE.Vector3();
+const plantScale = new THREE.Vector3();
+
+/** Push `eye` out of any crown or shrub of `planting`. True if it moved. */
+function pushOutOfPlanting(eye: THREE.Vector3, planting: THREE.Object3D): boolean {
+  const spheres = planting.userData.spheres as unknown;
+  if (!Array.isArray(spheres)) return false;
+  planting.updateWorldMatrix(true, false);
+  plantScale.setFromMatrixScale(planting.matrixWorld);
+  const scale = Math.max(plantScale.x, plantScale.y, plantScale.z);
+  let moved = false;
+  for (const s of spheres as Sphere[]) {
+    if (!s || !Number.isFinite(s.x + s.y + s.z + s.r)) continue;
+    plantCentre.set(s.x, s.y, s.z).applyMatrix4(planting.matrixWorld);
+    const reach = s.r * scale + PLANT_CLEARANCE;
+    const d = eye.distanceTo(plantCentre);
+    if (d >= reach) continue;
+    if (d < 1e-4) eye.y += reach;
+    else eye.sub(plantCentre).multiplyScalar(reach / d).add(plantCentre);
+    moved = true;
+  }
+  return moved;
+}
 
 function CameraRig({ bounds, start }: { bounds: Bounds; start: CameraPose }) {
   const get = useThree((s) => s.get);
@@ -455,7 +802,7 @@ function CameraRig({ bounds, start }: { bounds: Bounds; start: CameraPose }) {
       const { camera } = get();
       // Leaving the model mid-walk: the store already says "not walking", but the walker has not
       // handed the camera back yet (it does so after this). Its eye position is not an orbit pose.
-      if ((camera as THREE.PerspectiveCamera).fov !== ORBIT_FOV) return;
+      if ((camera as THREE.PerspectiveCamera).fov === WALK_FOV) return;
       useViewStore.getState().setPose({
         position: [camera.position.x, camera.position.y, camera.position.z],
         target: [controls.target.x, controls.target.y, controls.target.z],
@@ -497,6 +844,32 @@ function CameraRig({ bounds, start }: { bounds: Bounds; start: CameraPose }) {
     controlsRef.current?.update();
   }, [fitNonce, resetNonce, get]);
 
+  // A new lens: the same picture of the house, the camera stepping back or in to keep it the same size.
+  // Only on an actual change of lens: the canvas already starts with the lens's own field of view, and a
+  // restored pose was taken with it, so mounting must not rescale (it used to creep on every Plan ↔ Model).
+  const lens = useViewStore((s) => s.lens);
+  const shownLens = useRef(lens);
+  useEffect(() => {
+    if (shownLens.current === lens) return;
+    shownLens.current = lens;
+    const { camera, invalidate } = get();
+    const cam = camera as THREE.PerspectiveCamera;
+    // A walker puts the lens on as it hands the camera back.
+    if (useViewStore.getState().walking) return;
+    const fov = LENS_FOV[lens];
+    if (Math.abs(cam.fov - fov) < 1e-6) return;
+    const controls = controlsRef.current;
+    if (controls) {
+      const k = Math.tan(((cam.fov / 2) * Math.PI) / 180) / Math.tan(((fov / 2) * Math.PI) / 180);
+      cam.position.sub(controls.target).multiplyScalar(k).add(controls.target);
+    }
+    cam.fov = fov;
+    cam.updateProjectionMatrix();
+    controls?.update();
+    savePose();
+    invalidate();
+  }, [lens, get, savePose]);
+
   // Ready-made shots: aim the camera, then it is the user's to move again.
   const shotNonce = useViewStore((s) => s.shotNonce);
   const seenShot = useRef(shotNonce);
@@ -509,12 +882,15 @@ function CameraRig({ bounds, start }: { bounds: Bounds; start: CameraPose }) {
     // To the right of someone leaving by the front door.
     const [sx, sz] = [-fz, fx];
     const r = b.radius;
+    // Further back with a long lens, closer with a wide one, so each shot frames the house the same.
+    const k = lensReach(useViewStore.getState().lens);
     let position: [number, number, number];
     let target: [number, number, number] = [b.x, 1.1, b.z];
-    if (shot === 'street') position = [b.x + fx * r * 2.6 + sx * r * 0.5, 1.65, b.z + fz * r * 2.6 + sz * r * 0.5];
-    else if (shot === 'corner') position = [b.x + fx * r * 2.5 + sx * r * 2.2, r * 0.8 + 2.5, b.z + fz * r * 2.5 + sz * r * 2.2];
-    else if (shot === 'top') {
-      position = [b.x, r * 3.4, b.z + 0.01];
+    if (shot === 'street') position = [b.x + (fx * 2.6 + sx * 0.5) * r * k, 1.65, b.z + (fz * 2.6 + sz * 0.5) * r * k];
+    else if (shot === 'corner') {
+      position = [b.x + (fx * 2.5 + sx * 2.2) * r * k, 1.1 + (r * 0.8 + 1.4) * k, b.z + (fz * 2.5 + sz * 2.2) * r * k];
+    } else if (shot === 'top') {
+      position = [b.x, r * 3.4 * k, b.z + 0.01];
       target = [b.x, 0, b.z];
     } else {
       const pose = defaultPose(b, useUiStore.getState().fitNonce);
@@ -529,16 +905,47 @@ function CameraRig({ bounds, start }: { bounds: Bounds; start: CameraPose }) {
     invalidate();
   }, [shotNonce, get, savePose]);
 
+  // As the camera moves: keep it out of the trees and shrubs, and move the haze with it.
+  const plantingCache = useRef<{ mesh: THREE.Object3D | null; searched: number }>({ mesh: null, searched: -Infinity });
+  const onChange = useCallback(() => {
+    const controls = controlsRef.current;
+    if (!controls || useViewStore.getState().walking) return;
+    const { camera, scene } = get();
+    const cache = plantingCache.current;
+    if (!cache.mesh || !inScene(cache.mesh, scene)) {
+      cache.mesh = null;
+      // A scene without planting (the maquette) is not searched on every frame of a drag.
+      const now = performance.now();
+      if (now - cache.searched > 1000) {
+        cache.searched = now;
+        cache.mesh = findPlanting(scene);
+      }
+    }
+    if (cache.mesh && pushOutOfPlanting(camera.position, cache.mesh)) camera.lookAt(controls.target);
+    if (scene.fog instanceof THREE.Fog) fitFog(scene.fog, camera, controls.target, boundsRef.current.radius);
+  }, [get]);
+
+  // The haze starts where the camera already is, before anything moves it.
+  useEffect(() => {
+    onChange();
+    get().invalidate();
+  }, [onChange, get]);
+
+  // Zoom toward whatever is under the pointer, as if grabbing it. Not while verticals are straightened:
+  // the picture is shifted for drawing only, so the controls would aim at a different spot than the one shown.
+  const view = useViewStore((s) => s.view);
+  const straight = useViewStore((s) => s.straight);
+
   return (
     <OrbitControls
       ref={controlsRef}
       enabled={!walking}
       maxPolarAngle={Math.PI / 2 - 0.04}
       minDistance={1.5}
-      maxDistance={bounds.radius * 10}
+      maxDistance={bounds.radius * 16}
       onEnd={() => savePose()}
-      // Zoom toward whatever is under the pointer, as if grabbing it.
-      zoomToCursor
+      onChange={onChange}
+      zoomToCursor={!(view === 'exterior' && straight)}
       makeDefault
     />
   );
@@ -697,7 +1104,7 @@ function Walker({ world: walkWorld }: { world: WalkWorld }) {
       state.keys.clear();
       if (document.pointerLockElement === el) document.exitPointerLock();
       // Back to the orbit camera we left.
-      cam.fov = ORBIT_FOV;
+      cam.fov = LENS_FOV[useViewStore.getState().lens];
       cam.updateProjectionMatrix();
       const pose = useViewStore.getState().pose;
       const orbit = get().controls as unknown as OrbitLike | null;
@@ -1032,6 +1439,10 @@ export function Scene3D() {
   // Leaving the model ends a walk.
   useEffect(() => () => useViewStore.getState().stepOut(), []);
 
+  // The camera starts with the chosen lens, so a restored pose looks as it did. Made once: a new
+  // object here would have the canvas re-apply it to the camera on later renders (over a walker's lens).
+  const [cameraOptions] = useState(() => ({ fov: LENS_FOV[useViewStore.getState().lens] }));
+
   return (
     <div className={`scene-3d ${walking ? 'walking' : ''}`}>
       <SceneBoundary>
@@ -1039,7 +1450,7 @@ export function Scene3D() {
         <Canvas
           frameloop="demand"
           shadows="percentage"
-          camera={{ fov: ORBIT_FOV }}
+          camera={cameraOptions}
         >
           <SceneContents />
         </Canvas>

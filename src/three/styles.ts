@@ -9,6 +9,8 @@ import type { RoofKind } from '../types';
 import { roomKindFromName } from '../roomTypes';
 import type { RoomKind } from '../roomTypes';
 import type { TextureId } from './surfaces';
+import type { Roofing } from './roofPieces';
+import type { Siding } from './wallPieces';
 
 /** The floor finishes a style defines; every room kind maps onto one (see FLOOR_ZONE). */
 export type FloorZone = 'living' | 'kitchen' | 'bath' | 'bedroom' | 'garage' | 'outdoor';
@@ -49,6 +51,10 @@ export interface HouseStyle {
   wallTex?: TextureId;
   claddingTex?: TextureId;
   roofTex?: TextureId;
+  /** What the outside walls are made of, piece by piece (none: a smooth rendered wall). */
+  siding?: Siding;
+  /** What the roof is laid with (none: a smooth sheet). */
+  roofing?: Roofing;
   /** the cut top of the walls, seen from above */ cap: string;
   /** door and window frames, sills */ trim: string;
   door: string;
@@ -133,6 +139,8 @@ export const STYLES: readonly HouseStyle[] = [
   MAQUETTE,
   {
     id: 'scandinavian',
+    siding: 'v-board',
+    roofing: 'seam',
     label: 'Scandinavian',
     wallTex: 'plaster',
     claddingTex: 'timber',
@@ -175,6 +183,8 @@ export const STYLES: readonly HouseStyle[] = [
   },
   {
     id: 'warm-modern',
+    siding: 'h-board',
+    roofing: 'seam',
     label: 'Warm modern',
     wallTex: 'plaster',
     claddingTex: 'timber',
@@ -217,6 +227,8 @@ export const STYLES: readonly HouseStyle[] = [
   },
   {
     id: 'industrial',
+    siding: 'brick',
+    roofing: 'seam',
     label: 'Industrial loft',
     wallTex: 'plaster',
     claddingTex: 'brick',
@@ -259,6 +271,8 @@ export const STYLES: readonly HouseStyle[] = [
   },
   {
     id: 'coastal',
+    siding: 'lap',
+    roofing: 'shingle',
     label: 'Coastal',
     wallTex: 'plaster',
     claddingTex: 'plaster',
@@ -301,6 +315,7 @@ export const STYLES: readonly HouseStyle[] = [
   },
   {
     id: 'mediterranean',
+    roofing: 'barrel',
     label: 'Mediterranean',
     wallTex: 'plaster',
     claddingTex: 'render',
@@ -343,16 +358,19 @@ export const STYLES: readonly HouseStyle[] = [
   },
   {
     id: 'nocturne',
+    siding: 'v-board',
+    roofing: 'slate',
     label: 'Nocturne',
     wallTex: 'plaster',
     claddingTex: 'charred',
     roofTex: 'slate',
     wall: '#3c4045',
-    cladding: '#26292d',
+    // Dark, but not so dark the boards and their shadows vanish into one silhouette.
+    cladding: '#34373b',
     cap: '#17191b',
     trim: '#1b1d20',
     door: '#6b4a34',
-    roof: '#1c1e21',
+    roof: '#2a2c30',
     glass: '#8fb0c4',
     glassOpacity: 0.3,
     edges: null,
@@ -380,7 +398,7 @@ export const STYLES: readonly HouseStyle[] = [
     ground: '#2c2e31',
     sky: '#23262b',
     warmth: 0.3,
-    ambient: 0.75,
+    ambient: 0.9,
     roofDefault: 'flat',
   },
 ];

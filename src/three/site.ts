@@ -32,6 +32,14 @@ export interface SitePlan {
   /** Four corners each, plan meters; null without an entrance. */
   step: Point[] | null;
   path: Point[] | null;
+  /** Where the path goes out through the fence: the middle of the opening on the fence line, that side's outward normal, and half the opening. */
+  gate: { x: number; y: number; nx: number; ny: number; half: number } | null;
+  /** The path carried on past the gate to the lane (four corners, like `path`); null without a lane. */
+  walk: Point[] | null;
+  /** A country lane along the street side, running off past the lot both ways: centre line a→b, and its width. */
+  lane: { a: Point; b: Point; width: number } | null;
+  /** Outward normal of the lot's street side: the gate's side, or the entrance's, or +y. */
+  front: { nx: number; ny: number };
   /** Per building: the wall line, and rings further out where the ground shadow fades. */
   skirts: { inner: Point[]; mid: Point[]; outer: Point[] }[];
 }
@@ -47,8 +55,13 @@ export interface SiteInput {
 const STEP_DEPTH = 0.5;
 export const STEP_HEIGHT = 0.07;
 /** Under a leaf that swings out over it, the step is only a paving slab. */
-const STEP_HEIGHT_FLUSH = 0.005;
+export const STEP_HEIGHT_FLUSH = 0.005;
 const SKIRT_REACH = 0.9;
+/** From the front fence to the near edge of the lane, and the lane's width. */
+export const LANE_GAP = 2.6;
+export const LANE_WIDTH = 2.8;
+/** How far the lane runs on past the lot either way: into the haze. */
+const LANE_RUN = 100;
 
 const FRONT = /entr|front|main/i;
 
@@ -94,20 +107,30 @@ export function planSite(input: SiteInput): SitePlan | null {
   }
   const size = Math.max(x1 - x0, y1 - y0);
   if (!(size > 0.2) || size > 2000) return null;
-  const margin = Math.min(9, Math.max(3, size * 0.3));
+  // Room for a garden: more behind the house than in front of it, as on a real plot.
+  const margin = Math.min(12, Math.max(6, size * 0.5));
   const lot: Rect = { x0: x0 - margin, y0: y0 - margin, x1: x1 + margin, y1: y1 + margin };
 
   const entrance = findEntrance(input);
   let step: Point[] | null = null;
   let path: Point[] | null = null;
+  let gate: SitePlan['gate'] = null;
+  let walk: Point[] | null = null;
+  let lane: SitePlan['lane'] = null;
+  let front = { nx: 0, ny: 1 };
   if (entrance) {
     const { x, y, nx, ny, width } = entrance;
-    // A little more garden on the side people arrive from.
-    const front = margin * 0.5;
-    if (nx > 0.7) lot.x1 += front;
-    else if (nx < -0.7) lot.x0 -= front;
-    else if (ny > 0.7) lot.y1 += front;
-    else if (ny < -0.7) lot.y0 -= front;
+    // The rear of the lot, opposite the side people arrive from, half as deep again.
+    const rear = margin * 0.5;
+    if (Math.abs(nx) >= Math.abs(ny)) {
+      front = { nx: Math.sign(nx) || 1, ny: 0 };
+      if (nx > 0) lot.x0 -= rear;
+      else lot.x1 += rear;
+    } else {
+      front = { nx: 0, ny: Math.sign(ny) || 1 };
+      if (ny > 0) lot.y0 -= rear;
+      else lot.y1 += rear;
+    }
 
     const tx = -ny;
     const ty = nx;
@@ -120,12 +143,14 @@ export function planSite(input: SiteInput): SitePlan | null {
     step = quad(h, h + STEP_DEPTH, width / 2 + 0.25);
 
     // Straight out to the edge of the lot — or as far as the way is clear.
-    const hits: number[] = [];
-    if (nx > 1e-6) hits.push((lot.x1 - x) / nx);
-    if (nx < -1e-6) hits.push((lot.x0 - x) / nx);
-    if (ny > 1e-6) hits.push((lot.y1 - y) / ny);
-    if (ny < -1e-6) hits.push((lot.y0 - y) / ny);
-    let far = Math.min(...hits.filter((t) => t > 0));
+    const hits: { t: number; nx: number; ny: number }[] = [];
+    if (nx > 1e-6) hits.push({ t: (lot.x1 - x) / nx, nx: 1, ny: 0 });
+    if (nx < -1e-6) hits.push({ t: (lot.x0 - x) / nx, nx: -1, ny: 0 });
+    if (ny > 1e-6) hits.push({ t: (lot.y1 - y) / ny, nx: 0, ny: 1 });
+    if (ny < -1e-6) hits.push({ t: (lot.y0 - y) / ny, nx: 0, ny: -1 });
+    const exit = hits.filter((k) => k.t > 0).sort((p, q) => p.t - q.t)[0];
+    let far = exit ? exit.t : Infinity;
+    let reached = true;
     const half = Math.max(0.5, width / 2 + 0.05);
     const blocked = (t: number): boolean =>
       [-half, 0, half].some((s) => {
@@ -136,10 +161,41 @@ export function planSite(input: SiteInput): SitePlan | null {
       for (let t = h + STEP_DEPTH; t < far; t += 0.2) {
         if (blocked(t + 0.3)) {
           far = t;
+          reached = false;
           break;
         }
       }
       if (far - (h + STEP_DEPTH) > 0.3) path = quad(h + STEP_DEPTH, far, half);
+    }
+
+    // Out through a gate in the fence, and on across the verge to a lane that runs along the front.
+    if (path && reached && exit) {
+      front = { nx: exit.nx, ny: exit.ny };
+      const g = { x: x + nx * far, y: y + ny * far };
+      // Across the fence line, the path is this much wider than it is square on.
+      const facing = nx * exit.nx + ny * exit.ny;
+      gate = { x: g.x, y: g.y, nx: exit.nx, ny: exit.ny, half: half / Math.max(0.5, facing) + 0.1 };
+      if (facing > 0.6) {
+        walk = quad(far, far + (LANE_GAP + 0.5) / facing, half);
+        // Along the street side of the lot, out past both ends.
+        const sx = -exit.ny;
+        const sy = exit.nx;
+        const off = LANE_GAP + LANE_WIDTH / 2;
+        const ends = [
+          { x: lot.x0, y: lot.y0 },
+          { x: lot.x1, y: lot.y1 },
+        ].map((p) => p.x * sx + p.y * sy);
+        const lo = Math.min(...ends) - LANE_RUN;
+        const hi = Math.max(...ends) + LANE_RUN;
+        // A point on the fence line, carried out to the lane's middle.
+        const base = { x: g.x + exit.nx * off, y: g.y + exit.ny * off };
+        const along = base.x * sx + base.y * sy;
+        lane = {
+          a: { x: base.x + sx * (lo - along), y: base.y + sy * (lo - along) },
+          b: { x: base.x + sx * (hi - along), y: base.y + sy * (hi - along) },
+          width: LANE_WIDTH,
+        };
+      }
     }
   }
 
@@ -154,7 +210,7 @@ export function planSite(input: SiteInput): SitePlan | null {
     if (inner.length >= 3 && sound) skirts.push({ inner, mid, outer });
   }
 
-  return { lot, entrance, step, path, skirts };
+  return { lot, entrance, step, path, gate, walk, lane, front, skirts };
 }
 
 // ---------- meshes ----------
@@ -174,6 +230,53 @@ function flatQuad(corners: Point[], y: number): THREE.BufferGeometry {
   const order = flip ? [a, c, b, a, d, c] : [a, b, c, a, c, d];
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(order.flatMap((p) => [p.x, y, p.y]), 3));
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/**
+ * A box `w`×`h`×`d` about its centre (as BoxGeometry), with its top edges
+ * bevelled by `c`: a stone step, not a crisp white block.
+ */
+export function chamferedBox(w: number, h: number, d: number, c: number): THREE.BufferGeometry {
+  const x = w / 2;
+  const z = d / 2;
+  const y0 = -h / 2;
+  const y1 = h / 2;
+  const k = Math.max(0, Math.min(c, h * 0.5, x * 0.4, z * 0.4));
+  const ring = (y: number, inset: number): THREE.Vector3[] => [
+    new THREE.Vector3(-x + inset, y, -z + inset),
+    new THREE.Vector3(x - inset, y, -z + inset),
+    new THREE.Vector3(x - inset, y, z - inset),
+    new THREE.Vector3(-x + inset, y, z - inset),
+  ];
+  const bottom = ring(y0, 0);
+  const shoulder = ring(y1 - k, 0);
+  const top = ring(y1, k);
+  const positions: number[] = [];
+  const e1 = new THREE.Vector3();
+  const e2 = new THREE.Vector3();
+  const centroid = new THREE.Vector3();
+  // A convex solid: wind every face so it looks away from the middle.
+  const face = (pts: THREE.Vector3[]): void => {
+    centroid.set(0, 0, 0);
+    for (const p of pts) centroid.addScaledVector(p, 1 / pts.length);
+    const n = e1.subVectors(pts[1], pts[0]).cross(e2.subVectors(pts[2], pts[0]));
+    const flip = n.dot(centroid) < 0;
+    for (let i = 1; i + 1 < pts.length; i++) {
+      const tri = flip ? [pts[0], pts[i + 1], pts[i]] : [pts[0], pts[i], pts[i + 1]];
+      for (const p of tri) positions.push(p.x, p.y, p.z);
+    }
+  };
+  face(top);
+  face(bottom);
+  for (let i = 0; i < 4; i++) {
+    const j = (i + 1) % 4;
+    face([bottom[i], bottom[j], shoulder[j], shoulder[i]]);
+    if (k > 0) face([shoulder[i], shoulder[j], top[j], top[i]]);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   geo.computeVertexNormals();
   return geo;
 }
@@ -266,7 +369,7 @@ export function buildSite(plan: SitePlan | null): Site {
       const w = Math.hypot(b.x - a.x, b.y - a.y);
       const depth = Math.hypot(d.x - a.x, d.y - a.y);
       const height = plan.entrance.opensOut ? STEP_HEIGHT_FLUSH : STEP_HEIGHT;
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, height, depth), pathMat);
+      const mesh = new THREE.Mesh(chamferedBox(w, height, depth, 0.012), pathMat);
       const cx = plan.step.reduce((s, p) => s + p.x, 0) / 4;
       const cy = plan.step.reduce((s, p) => s + p.y, 0) / 4;
       mesh.position.set(cx, height / 2, cy);

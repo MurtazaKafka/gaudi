@@ -82,11 +82,14 @@ export function sunState(hour: number, style: HouseStyle): SunState {
   return {
     dir,
     keyColor: key,
-    keyIntensity: 1.9 * (1 - 0.5 * low * low),
+    // Holds up well into the evening and only gives way right at the horizon, so long warm raking shadows survive.
+    keyIntensity: 1.9 * (1 - 0.42 * Math.pow(low, 3.2)),
     hemiSky: mixHex('#fdf9ef', morning ? '#f7dccb' : '#eec3ad', low * 0.6),
     hemiGround: '#cfc8b8',
     hemiIntensity: 0.9 * style.ambient * (1 - 0.35 * low),
-    fillIntensity: 0.35 * style.ambient * (1 - 0.4 * low),
+    // The fill casts no shadow, so at a low sun it would flatten the long shadows: let it go.
+    // (Only the maquette's studio uses it; the styled looks take their shade light from the sky.)
+    fillIntensity: 0.35 * style.ambient * (1 - 0.8 * low),
     background: mixHex(style.sky, morning ? '#f6cfae' : '#eda77e', Math.pow(low, 1.6) * (dark ? 0.22 : 0.55)),
     ground: mixHex(style.ground, morning ? '#e9c7a6' : '#d99a72', Math.pow(low, 1.6) * (dark ? 0.1 : 0.25)),
   };

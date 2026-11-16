@@ -4,6 +4,7 @@ import { useUiStore } from '../uiStore';
 import { ensureApiKey, setApiKey, useKeyStore } from '../ai/client';
 import { fromMeters, parseLength, unitSuffix } from '../units';
 import { useDismiss } from './useDismiss';
+import { setSoundsOn, soundsOn } from '../sound';
 
 function LengthField({
   label,
@@ -70,6 +71,7 @@ function LengthField({
 /** Gear menu: units, wall dimensions, display toggles, API key. Rarely-touched things live here. */
 export function SettingsMenu() {
   const [open, setOpen] = useState(false);
+  const [sounds, setSounds] = useState(soundsOn);
   const ref = useRef<HTMLDivElement>(null);
   useDismiss(ref, open, useCallback(() => setOpen(false), []));
 
@@ -136,6 +138,18 @@ export function SettingsMenu() {
               disabled={readOnly}
               onChange={(v) => updateSettings({ wallThickness: v })}
             />
+            <div className="row between">
+              <span className="label">Sounds</span>
+              <button
+                className={`switch ${sounds ? 'on' : ''}`}
+                aria-label="Sounds when you edit"
+                aria-pressed={sounds}
+                onClick={() => {
+                  setSoundsOn(!sounds);
+                  setSounds(!sounds);
+                }}
+              />
+            </div>
             <div className="row between">
               <span className="label">Wall dimensions</span>
               <button

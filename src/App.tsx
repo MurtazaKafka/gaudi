@@ -20,6 +20,7 @@ import { usePreviewStore } from './preview';
 import { redo, undo } from './history';
 import { useKeyStore } from './ai/client';
 import { enterSharedView, exitSharedView, useShareStore } from './share/shareStore';
+import { startEditSounds } from './sound';
 
 // three.js only loads when the user first builds the model.
 const Scene3D = lazy(() =>
@@ -123,6 +124,9 @@ export default function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  // Quiet sounds for single edits (off in settings).
+  useEffect(() => startEditSounds(), []);
 
   // #/p/{id} links open the shared view; clearing the hash leaves it.
   useEffect(() => {

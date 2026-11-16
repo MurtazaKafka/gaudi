@@ -1,15 +1,16 @@
 /** The controls over the 3D view while a render is running or finished. */
-import { RENDER_SAMPLES, RENDER_SIZES, useRenderStore } from './renderStore';
+import { RENDER_SIZES, useRenderStore } from './renderStore';
 import '../../styles/render.css';
 
 export function RenderOverlay() {
   const phase = useRenderStore((s) => s.phase);
   const samples = useRenderStore((s) => s.samples);
+  const target = useRenderStore((s) => s.target);
   const error = useRenderStore((s) => s.error);
   const size = useRenderStore((s) => s.size);
   if (phase === 'off') return null;
   const { stop, requestSave } = useRenderStore.getState();
-  const pct = Math.round((samples / RENDER_SAMPLES) * 100);
+  const pct = Math.min(100, Math.round((samples / Math.max(1, target)) * 100));
 
   return (
     <div className="float-bar bottom render-bar" role="status">
