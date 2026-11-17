@@ -359,6 +359,42 @@ const unit = (a: Point, b: Point): Point => {
 const dot = (a: Point, b: Point): number => a.x * b.x + a.y * b.y;
 const cross = (a: Point, b: Point): number => a.x * b.y - a.y * b.x;
 
+/**
+ * Follow a wall that runs from `from` in direction `dir` on through in-line
+ * pieces, for as long as each join has nothing else meeting it, until the
+ * run is `d` long. Returns the pieces the move swallows whole and the one it
+ * ends on (to be shortened), or null if the run ends — or something meets
+ * it — before `d`, which would collapse a room.
+ */
+function runAhead(
+  walls: Wall[],
+  first: Wall,
+  from: Point,
+  dir: Point,
+  d: number,
+): { gone: Wall[]; shorten: { wall: Wall; end: 'a' | 'b' } | null } | null {
+  const gone: Wall[] = [];
+  let cur = first;
+  let start = from;
+  let total = dist(from, near(first.a, from) ? first.b : first.a);
+  while (total < d + MIN_WALL && Math.abs(total - d) >= 0.01) {
+    const join = near(cur.a, start) ? cur.b : cur.a;
+    const meeting = walls.filter((w) => w !== cur && !gone.includes(w) && distToSegment(join, w.a, w.b) < 0.01);
+    if (meeting.length !== 1) return null;
+    const next = meeting[0];
+    const nextEnd = near(next.a, join) ? 'a' : near(next.b, join) ? 'b' : null;
+    if (!nextEnd) return null;
+    const far = next[nextEnd === 'a' ? 'b' : 'a'];
+    if (dot(unit(join, far), dir) < 0.999) return null;
+    gone.push(cur);
+    cur = next;
+    start = join;
+    total += dist(join, far);
+  }
+  if (Math.abs(total - d) < 0.01) return { gone: [...gone, cur], shorten: null };
+  return { gone, shorten: { wall: cur, end: near(cur.a, start) ? 'a' : 'b' } };
+}
+
 function moveWall(plan: PlanData, ctx: Ctx, wall: Wall, toward: Compass, distance: number): void {
   const len = dist(wall.a, wall.b);
   if (len < 1e-6) fail('that wall has no length');
@@ -403,8 +439,14 @@ function moveWall(plan: PlanData, ctx: Ctx, wall: Wall, toward: Compass, distanc
           // Runs exactly the way the wall is moving: it gets shorter (or becomes a T-junction).
           covered = true;
           if (Math.abs(xl - d) < 0.01) closing.push(x);
-          else if (xl < d + MIN_WALL) fail('that is further than the neighbouring wall is long — the room would collapse');
-          else shorten.push({ wall: x, end: xe });
+          else if (xl >= d + MIN_WALL) shorten.push({ wall: x, end: xe });
+          else {
+            // A side left in pieces (a wall that once met here was removed) still
+            // counts as one: the move runs on through joins nothing else meets.
+            const run = runAhead(others, x, P, n, d) ?? fail('that is further than the neighbouring wall is long — the room would collapse');
+            closing.push(...run.gone);
+            if (run.shorten) shorten.push(run.shorten);
+          }
         } else {
           if (c < -0.999) covered = true;
           updates.push({ wall: x, end: xe, to: P2 });
@@ -655,7 +697,14 @@ function applyOne(plan: PlanData, ctx: Ctx, raw: Record<string, unknown>): void 
       // Several collinear walls ("W1, W2") move together as one face.
       const names = text(raw.wall).split(/[\s,]+/).filter(Boolean);
       if (names.length === 0 || names.length > 12) fail('no wall given');
-      const walls = [...new Set(names.map((n) => findWall(plan, ctx, n)))];
+      // A piece of the face an earlier move already swallowed is skipped, not an error.
+      const swallowed = (n: string): boolean => {
+        const id = ctx.refs.walls[n.toUpperCase()];
+        return !!id && !plan.walls.some((w) => w.id === id);
+      };
+      const live = names.filter((n) => !swallowed(n));
+      if (live.length === 0) fail(`no wall "${names[0]}"`);
+      const walls = [...new Set(live.map((n) => findWall(plan, ctx, n)))];
       if (!isCompass(raw.toward)) fail('no direction given');
       let distance = coord(raw.distance, 'distance');
       let toward = raw.toward as Compass;
