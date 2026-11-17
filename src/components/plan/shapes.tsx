@@ -9,7 +9,7 @@ import { currentUnits, formatLength } from '../../units';
 import { theme } from '../../theme';
 import type { Opening, Point, Units, Wall } from '../../types';
 import type { EndpointRef } from '../../store';
-import { finishWallEdit, moveJunctions, moveOpening } from './actions';
+import { finishWallEdit, moveJunctions, moveOpening, toggleOnPlan } from './actions';
 import {
   dimensionSide,
   fineStep,
@@ -48,17 +48,10 @@ export const GridLayerLines = memo(function GridLayerLines({
   );
 });
 
-/** Select the wall, or toggle it into a wall-only multi-selection with Shift. */
+/** Select the wall, or with Shift add it to (or take it out of) whatever is selected. */
 function clickWall(id: string, additive: boolean): void {
-  const ui = useUiStore.getState();
-  if (!additive) {
-    ui.setSelection([id]);
-    return;
-  }
-  const ids = ui.selectedWallIds.includes(id)
-    ? ui.selectedWallIds.filter((x) => x !== id)
-    : [...ui.selectedWallIds, id];
-  ui.setSelection(ids); // also clears the other kinds, so ⌫ never deletes more than what shows
+  if (additive) toggleOnPlan('walls', id);
+  else useUiStore.getState().setSelection([id]);
 }
 
 /**
@@ -566,7 +559,8 @@ export const OpeningShape = memo(function OpeningShape({
           onClick={(e) => {
             if (e.evt.button !== 0) return;
             e.cancelBubble = true;
-            useUiStore.getState().setOpeningSelection([opening.id]);
+            if (e.evt.shiftKey) toggleOnPlan('openings', opening.id);
+            else useUiStore.getState().setOpeningSelection([opening.id]);
           }}
         />
         {selected && (

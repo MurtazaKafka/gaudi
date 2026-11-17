@@ -11,20 +11,15 @@ import { ptEq } from '../geometry';
 import { currentUnits } from '../units';
 import { theme } from '../theme';
 import { nearestFit } from '../solidity';
-import { canEdit, placeFurniture, takeInHand, type InHand } from './plan/actions';
+import { canEdit, placeFurniture, takeInHand, toggleOnPlan, type InHand } from './plan/actions';
 import { fineStep, snapPointTo } from './plan/drafting';
 import type { DrawingLook } from './plan/look';
 import { planShapes, traceShape, traceShapes } from './plan/symbol';
 
-/** Click selects one item; Shift-click adds to or removes from a furniture-only selection. */
+/** Click selects one item; Shift-click adds it to (or takes it out of) whatever is selected. */
 function clickFurniture(id: string, additive: boolean): void {
-  const ui = useUiStore.getState();
-  if (!additive) {
-    ui.setFurnitureSelection([id]);
-    return;
-  }
-  const ids = ui.selectedFurnitureIds;
-  ui.setFurnitureSelection(ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]);
+  if (additive) toggleOnPlan('furniture', id);
+  else useUiStore.getState().setFurnitureSelection([id]);
 }
 
 /** A drag in progress: the pieces in hand, the last pointer spot, the last spot that fitted, and whether it fits now. */

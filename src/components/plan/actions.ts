@@ -12,6 +12,15 @@ import { fitsAt, handOf, nearestFit, sweepFit, worldFor, type Hand, type World }
 import { carryRiders, restOf, restsOnAny, ridersOf } from '../../stacking';
 import type { Furniture, Point, RestMode, Wall } from '../../types';
 import {
+  boxOf,
+  liveSelection,
+  marqueeHits,
+  mergeSelection,
+  sameSelection,
+  toggleInSelection,
+  type PlanSelection,
+} from './marquee';
+import {
   junctionRefs,
   MIN_WALL,
   movedPoint,
@@ -66,11 +75,16 @@ export function moveJunctions(groups: JunctionGroup[], delta: Point): void {
  */
 export function finishWallEdit(): void {
   if (!canEdit()) return;
-  const removed = usePlanStore.getState().cleanupWalls();
-  if (!removed.length) return;
-  const ui = useUiStore.getState();
-  if (ui.selectedWallIds.some((id) => removed.includes(id))) {
-    useUiStore.setState({ selectedWallIds: ui.selectedWallIds.filter((id) => !removed.includes(id)) });
+  usePlanStore.getState().cleanupWalls();
+  // Walls that collapsed or doubled up are gone, and so are doors and windows that no longer fit theirs.
+  const sel = currentSelection();
+  const live = liveSelection(usePlanStore.getState(), sel);
+  if (!sameSelection(sel, live)) {
+    useUiStore.setState({
+      selectedWallIds: live.walls,
+      selectedOpeningIds: live.openings,
+      selectedFurnitureIds: live.furniture,
+    });
   }
 }
 
@@ -264,6 +278,53 @@ export function setFurnitureRest(id: string, onTop: boolean): void {
   usePlanStore.setState((s) => ({
     furniture: s.furniture.map((f) => (f.id !== id ? f : want ? { ...f, rest: want } : bare(f))),
   }));
+}
+
+// ---------- selecting several things ----------
+
+/** What is selected on the plan right now. */
+export function currentSelection(): PlanSelection {
+  const ui = useUiStore.getState();
+  return { walls: ui.selectedWallIds, openings: ui.selectedOpeningIds, furniture: ui.selectedFurnitureIds };
+}
+
+/** The selection, less anything that is no longer in the plan: what a new selection may be built on. */
+export function standingSelection(): PlanSelection {
+  return liveSelection(usePlanStore.getState(), currentSelection());
+}
+
+/** Select exactly `sel`. Does nothing (no re-render) when that is already the selection. */
+export function selectOnPlan(sel: PlanSelection): void {
+  const ui = useUiStore.getState();
+  if (ui.selectedRoomKey === null && sameSelection(currentSelection(), sel)) return;
+  ui.setPlanSelection(sel);
+}
+
+/** Shift-click: add one thing to the selection, or take it out, leaving the rest selected. */
+export function toggleOnPlan(kind: keyof PlanSelection, id: string): void {
+  selectOnPlan(toggleInSelection(standingSelection(), kind, id));
+}
+
+/** Select what the rectangle between two plan points touches, on top of `base`. */
+export function selectInBox(a: Point, b: Point, base: PlanSelection): void {
+  if (!canEdit()) return;
+  const hits = marqueeHits(usePlanStore.getState(), boxOf(a, b), furnitureDef);
+  selectOnPlan(mergeSelection(base, hits));
+}
+
+/** Select every wall, door, window and piece of furniture. */
+export function selectAll(): boolean {
+  if (!canEdit()) return false;
+  const plan = usePlanStore.getState();
+  if (!plan.walls.length && !plan.furniture.length) return false;
+  const ui = useUiStore.getState();
+  if (ui.tool !== 'select') ui.setTool('select');
+  selectOnPlan({
+    walls: plan.walls.map((w) => w.id),
+    openings: plan.openings.map((o) => o.id),
+    furniture: plan.furniture.map((f) => f.id),
+  });
+  return true;
 }
 
 /** Copy the selected furniture one grid step down-right and select the copies. */

@@ -7,7 +7,7 @@ import '../styles/plan.css';
 
 const hints: Record<Tool, string> = {
   wall: 'click to place · type a length, enter · ⇧ locks the angle · esc ends the run',
-  select: 'click to select · drag to move · arrows nudge · ⌘D duplicates · ⌫ deletes',
+  select: 'click to select · drag a box to select several · ⇧ adds · ⌘D duplicates · ⌫ deletes',
   door: 'click a wall to place a door · click a door again to widen it, then pair it · esc for select',
   window: 'click a wall to place a window · click a window again for the next size · esc for select',
   furniture: 'click to place · R rotates · esc for select',
@@ -35,12 +35,18 @@ export function StatusBar() {
   const roomCount = rooms.length;
   const area = rooms.reduce((sum, r) => sum + r.area, 0);
 
+  const selected = useUiStore(
+    (s) => s.selectedWallIds.length + s.selectedOpeningIds.length + s.selectedFurnitureIds.length,
+  );
+
   const inPlan = mode === 'plan';
   const hint = !inPlan
     ? 'drag orbits · scroll zooms toward the pointer · ⇧ drag pans · R renders · esc returns to plan'
     : readOnly && tool !== 'measure'
       ? VIEW_ONLY_HINT
-      : hints[tool];
+      : tool === 'select' && selected > 1
+        ? `${selected} selected · arrows nudge · ⌫ delete · esc clears`
+        : hints[tool];
   return (
     <footer className="statusbar">
       <span className="status-tool">{inPlan ? (readOnly && tool !== 'measure' ? 'view' : tool) : 'model'}</span>

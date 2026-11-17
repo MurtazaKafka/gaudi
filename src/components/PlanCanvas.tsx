@@ -1,5 +1,5 @@
 import { memo, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react';
-import { Circle, Group, Layer, Line, Stage } from 'react-konva';
+import { Circle, Group, Layer, Line, Rect, Stage } from 'react-konva';
 import type Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
 import { DEFAULT_OPENING_WIDTH, OPENING_STEPS, usePlanStore } from '../store';
@@ -23,7 +23,12 @@ import {
   nudgeSelection,
   roomsFor,
   rotateSelection,
+  selectAll,
+  selectInBox,
+  selectOnPlan,
+  standingSelection,
 } from './plan/actions';
+import { clickSwallowed, NO_SELECTION, swallowNextClick, type PlanSelection } from './plan/marquee';
 import { setEditorDriver } from './plan/devHandle';
 import {
   arrowDelta,
@@ -80,6 +85,12 @@ declare global {
 
 const MAX_TYPED_WALL = 500;
 const MAX_MEASURES = 40;
+/** How far (px) a press must travel before it is a selection rectangle and not a click. */
+const MARQUEE_START_PX = 4;
+/** Corner handles and length tags are for working on a few walls, not for a rectangle's worth. */
+const MAX_WALL_HANDLES = 4;
+/** The name the canvas knows a room's floor by (a rectangle may start on one). */
+const ROOM_FILL = 'room-fill';
 
 /** Where a door/window would land for a pointer position; reads the store directly. */
 function computeGhost(raw: Point, type: OpeningType, scale: number): OpeningGhost | null {
@@ -200,6 +211,9 @@ export function PlanCanvas() {
   const pointer = useRef<{ raw: Point; shift: boolean; alt?: boolean } | null>(null);
   /** Where the furniture being placed would go, and whether it fits there (it is solid: see solidity.ts). */
   const [placeFits, placeFitsRef, setPlaceFits] = useRefState(true);
+  /** The selection rectangle being dragged (plan meters), and how to end it. */
+  const [marquee, , setMarquee] = useRefState<{ a: Point; b: Point } | null>(null);
+  const marqueeDrag = useRef<{ stop: () => void; cancel: () => void } | null>(null);
 
   const setSnap = (next: SnapResult | null) => {
     const cur = snapRef.current;
@@ -300,6 +314,57 @@ export function PlanCanvas() {
     refresh();
   };
 
+  /**
+   * A press on bare canvas or a room's floor with the select tool may become a
+   * selection rectangle. It is followed on the window, so it carries on (and
+   * always ends) wherever the pointer goes; until it has travelled a few
+   * pixels it is still just a click. With Shift it adds to the selection.
+   * Esc puts back `prior`, what was selected before the press.
+   */
+  const startMarquee = (start: Point, ev: MouseEvent, prior: PlanSelection) => {
+    marqueeDrag.current?.stop();
+    const base: PlanSelection = ev.shiftKey ? prior : NO_SELECTION;
+    const origin = { x: ev.clientX, y: ev.clientY };
+    let active = false;
+    const stop = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp, true);
+      window.removeEventListener('blur', stop);
+      marqueeDrag.current = null;
+      setMarquee(null);
+    };
+    const onMove = (e: MouseEvent) => {
+      if (e.buttons === 0) {
+        stop(); // the release happened somewhere we never heard about
+        return;
+      }
+      if (!active && Math.hypot(e.clientX - origin.x, e.clientY - origin.y) < MARQUEE_START_PX) return;
+      const r = containerRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const p = toWorld(viewRef.current, e.clientX - r.left, e.clientY - r.top);
+      active = true;
+      setMarquee({ a: start, b: p });
+      selectInBox(start, p, base);
+    };
+    const onUp = (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      // To the canvas the release is also a click on the room the drag began in.
+      if (active) swallowNextClick();
+      stop();
+    };
+    marqueeDrag.current = {
+      stop,
+      cancel: () => {
+        selectOnPlan(prior);
+        stop();
+      },
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp, true);
+    window.addEventListener('blur', stop);
+  };
+  useEffect(() => () => marqueeDrag.current?.stop(), []);
+
   /** A left press with the current tool. `bare` = nothing was under the pointer. */
   const pointerDown = (raw: Point, shift: boolean, bare: boolean, alt = false) => {
     pointer.current = { raw, shift, alt };
@@ -377,8 +442,8 @@ export function PlanCanvas() {
       return;
     }
 
-    // Select tool: clicking bare canvas clears the selection.
-    if (bare && !ui.readOnly) ui.setSelection([]);
+    // Select tool: clicking bare canvas clears the selection (Shift keeps it, to add to).
+    if (bare && !ui.readOnly && !shift) ui.setSelection([]);
   };
 
   // --- pointer handlers ---
@@ -394,7 +459,13 @@ export function PlanCanvas() {
     const stage = stageRef.current;
     const pos = stage?.getPointerPosition();
     if (!pos || e.evt.button !== 0) return;
-    pointerDown(toWorld(view, pos.x, pos.y), e.evt.shiftKey, e.target === stage, e.evt.altKey);
+    const raw = toWorld(view, pos.x, pos.y);
+    const bare = e.target === stage;
+    const ui = useUiStore.getState();
+    // What was selected before this press clears it: Esc on the rectangle puts it back.
+    const prior = standingSelection();
+    pointerDown(raw, e.evt.shiftKey, bare, e.evt.altKey);
+    if (ui.tool === 'select' && !ui.readOnly && (bare || e.target.hasName(ROOM_FILL))) startMarquee(raw, e.evt, prior);
   };
 
   const handleMouseLeave = () => {
@@ -441,10 +512,17 @@ export function PlanCanvas() {
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
 
     if (e.metaKey || e.ctrlKey) {
-      // The only chord the canvas owns. Everything else (⌘V, ⌘F, ⌘D-with-Shift…) is the browser's.
-      if (key === 'd' && !e.altKey && !e.shiftKey) {
+      // The chords the canvas owns: ⌘D ⌘A. Everything else (⌘V, ⌘F, any of these with Shift…) is the browser's.
+      if (e.altKey || e.shiftKey || ro) return;
+      if (key === 'd') {
         e.preventDefault();
         if (!e.repeat) duplicateSelection();
+      } else if (key === 'a') {
+        e.preventDefault();
+        if (!e.repeat) {
+          endRun();
+          selectAll();
+        }
       }
       return;
     }
@@ -485,7 +563,8 @@ export function PlanCanvas() {
 
     switch (key) {
       case 'Escape':
-        if (typedRef.current) setTyped('');
+        if (marqueeDrag.current) marqueeDrag.current.cancel();
+        else if (typedRef.current) setTyped('');
         else if (anchorRef.current) endRun();
         else if (measureAnchorRef.current) setMeasureAnchor(null);
         else if (measuresRef.current.length) setMeasures([]);
@@ -575,6 +654,7 @@ export function PlanCanvas() {
       const swapped =
         s.fitNonce !== prev.fitNonce || s.readOnly !== prev.readOnly || s.mode !== prev.mode;
       if (!toolChanged && !swapped) return;
+      marqueeDrag.current?.stop();
       if (swapped || s.tool !== 'wall') {
         setAnchor(null);
         setTyped('');
@@ -751,18 +831,24 @@ export function PlanCanvas() {
     ? 'grabbing'
     : spaceDown
       ? 'grab'
-      : tool !== 'select'
+      : tool !== 'select' || marquee
         ? 'crosshair'
         : (hoverCursor ?? 'default');
 
-  const selectedWalls = editing ? walls.filter((w) => selectedWallIds.includes(w.id)) : [];
+  // Handles, length tags and inspectors belong to a selection of one kind of thing;
+  // a mixed one (a rectangle) is only highlighted, to be moved or deleted whole.
+  const kinds =
+    Number(selectedWallIds.length > 0) + Number(selectedOpeningIds.length > 0) + Number(selectedFurnitureIds.length > 0);
+  const oneKind = editing && kinds === 1 && !marquee;
+  const handleWallIds = oneKind && selectedWallIds.length <= MAX_WALL_HANDLES ? selectedWallIds : NO_IDS;
+  const selectedWalls = handleWallIds.length ? walls.filter((w) => handleWallIds.includes(w.id)) : [];
   const selectedOpening =
-    editing && selectedOpeningIds.length === 1
+    oneKind && selectedOpeningIds.length === 1
       ? openings.find((o) => o.id === selectedOpeningIds[0])
       : undefined;
   const selectedOpeningWall = selectedOpening && walls.find((w) => w.id === selectedOpening.wallId);
   const selectedItem =
-    editing && selectedFurnitureIds.length === 1
+    oneKind && selectedFurnitureIds.length === 1
       ? furniture.find((f) => f.id === selectedFurnitureIds[0])
       : undefined;
 
@@ -873,7 +959,7 @@ export function PlanCanvas() {
               thickness={settings.wallThickness}
               scale={view.scale}
               units={units}
-              hiddenIds={editing ? selectedWallIds : NO_IDS}
+              hiddenIds={handleWallIds}
             />
           )}
 
@@ -976,6 +1062,21 @@ export function PlanCanvas() {
           ))}
           {tool === 'measure' && measureAnchor && snap && (
             <MeasureLine a={measureAnchor} b={snap.p} scale={view.scale} units={units} live />
+          )}
+
+          {/* the selection rectangle being dragged */}
+          {marquee && (
+            <Rect
+              x={Math.min(marquee.a.x, marquee.b.x)}
+              y={Math.min(marquee.a.y, marquee.b.y)}
+              width={Math.abs(marquee.b.x - marquee.a.x)}
+              height={Math.abs(marquee.b.y - marquee.a.y)}
+              fill={theme.accentSoft}
+              stroke={theme.accent}
+              strokeWidth={px(1)}
+              dash={[px(4), px(3)]}
+              listening={false}
+            />
           )}
 
           {/* where the next click lands */}
@@ -1085,10 +1186,12 @@ const RoomFill = memo(function RoomFill({
         points={points}
         closed
         fill={fill}
+        name={ROOM_FILL}
         listening={interactive}
         perfectDrawEnabled={false}
         onClick={(e) => {
-          if (e.evt.button !== 0) return;
+          // The release that ends a selection rectangle is not a click on the room it began in.
+          if (e.evt.button !== 0 || clickSwallowed()) return;
           e.cancelBubble = true;
           useUiStore.getState().setRoomSelection(room.key);
         }}

@@ -11,6 +11,8 @@ const ROWS: [string, string[]][] = [
   ['Render the 3D view', ['R']],
   ['Measure', ['M']],
   ['Rotate furniture', ['R']],
+  ['Select several', ['drag a box', '⇧ click']],
+  ['Select everything', ['⌘A']],
   ['Duplicate furniture', ['⌘D']],
   ['Nudge selection', ['← ↑ ↓ →']],
   ['Let furniture overlap', ['⌥', 'drag']],

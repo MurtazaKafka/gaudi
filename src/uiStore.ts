@@ -53,6 +53,8 @@ interface UiState {
   setOpeningSelection: (ids: string[]) => void;
   setFurnitureSelection: (ids: string[]) => void;
   setRoomSelection: (key: string | null) => void;
+  /** Select any mix of walls, doors/windows and furniture at once (a dragged rectangle, a paste, select all). */
+  setPlanSelection: (sel: { walls: string[]; openings: string[]; furniture: string[] }) => void;
   startPlacing: (kind: FurnitureKind) => void;
   setPaletteOpen: (open: boolean) => void;
   /** Bumped to focus the product search field in the palette. */
@@ -136,6 +138,13 @@ export const useUiStore = create<UiState>((set) => ({
       selectedFurnitureIds: ids,
       selectedWallIds: [],
       selectedOpeningIds: [],
+      selectedRoomKey: null,
+    }),
+  setPlanSelection: (sel) =>
+    set({
+      selectedWallIds: sel.walls,
+      selectedOpeningIds: sel.openings,
+      selectedFurnitureIds: sel.furniture,
       selectedRoomKey: null,
     }),
   setRoomSelection: (key) =>
