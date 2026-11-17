@@ -18,9 +18,13 @@ import type { Furniture, Opening, OpeningType, Point, Tool } from '../types';
 import { FurnitureShape } from './FurnitureShape';
 import { RoomAiPanel } from './RoomAiPanel';
 import {
+  copySelection,
+  cutSelection,
   deleteSelection,
   duplicateSelection,
+  hasClipboard,
   nudgeSelection,
+  pasteClipboard,
   roomsFor,
   rotateSelection,
   selectAll,
@@ -512,11 +516,23 @@ export function PlanCanvas() {
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
 
     if (e.metaKey || e.ctrlKey) {
-      // The chords the canvas owns: ⌘D ⌘A. Everything else (⌘V, ⌘F, any of these with Shift…) is the browser's.
+      // The chords the canvas owns: ⌘D ⌘C ⌘X ⌘V ⌘A. Everything else (⌘F, any of these with Shift…) is the browser's.
       if (e.altKey || e.shiftKey || ro) return;
       if (key === 'd') {
         e.preventDefault();
         if (!e.repeat) duplicateSelection();
+      } else if (key === 'c' || key === 'x') {
+        // Text selected on the page is the browser's to copy.
+        if (window.getSelection()?.toString()) return;
+        if (e.repeat) e.preventDefault();
+        else if (key === 'c' ? copySelection() : cutSelection()) e.preventDefault();
+      } else if (key === 'v') {
+        if (!hasClipboard()) return;
+        e.preventDefault();
+        if (!e.repeat) {
+          endRun();
+          pasteClipboard(pointer.current?.raw ?? null);
+        }
       } else if (key === 'a') {
         e.preventDefault();
         if (!e.repeat) {
@@ -836,7 +852,7 @@ export function PlanCanvas() {
         : (hoverCursor ?? 'default');
 
   // Handles, length tags and inspectors belong to a selection of one kind of thing;
-  // a mixed one (a rectangle) is only highlighted, to be moved or deleted whole.
+  // a mixed one (a rectangle, a paste) is only highlighted, to be moved, copied or deleted whole.
   const kinds =
     Number(selectedWallIds.length > 0) + Number(selectedOpeningIds.length > 0) + Number(selectedFurnitureIds.length > 0);
   const oneKind = editing && kinds === 1 && !marquee;

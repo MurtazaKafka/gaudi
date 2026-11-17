@@ -6,11 +6,14 @@ import { usePlanStore } from '../../store';
 import { useUiStore } from '../../uiStore';
 import { transact } from '../../history';
 import { dist, ptEq } from '../../geometry';
-import { furnitureDef, type FurnitureDef } from '../../catalog';
+import { furnitureDef, kindExists, type FurnitureDef } from '../../catalog';
+import { PLAN_LIMITS } from '../../plan';
 import { detectRooms, type DetectedRoom } from '../../rooms';
 import { fitsAt, handOf, nearestFit, sweepFit, worldFor, type Hand, type World } from '../../solidity';
 import { carryRiders, restOf, restsOnAny, ridersOf } from '../../stacking';
+import { toast, toastError } from '../../toast';
 import type { Furniture, Point, RestMode, Wall } from '../../types';
+import { clipOf, pasteClip, type Clip } from './clip';
 import {
   boxOf,
   liveSelection,
@@ -28,6 +31,7 @@ import {
   OPENING_GAP,
   resizedEnd,
   slideOpening,
+  snapPointTo,
   wallMoveGroups,
   type JunctionGroup,
 } from './drafting';
@@ -327,20 +331,103 @@ export function selectAll(): boolean {
   return true;
 }
 
-/** Copy the selected furniture one grid step down-right and select the copies. */
-export function duplicateSelection(): string[] {
-  const ui = useUiStore.getState();
-  if (!canEdit() || !ui.selectedFurnitureIds.length) return [];
+// ---------- copy and paste ----------
+
+/** The last thing copied, and how many times it has been pasted without a pointer to aim at. */
+let clipboard: { clip: Clip; pastes: number } | null = null;
+
+export const hasClipboard = (): boolean => clipboard !== null;
+
+const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
+
+function describe(walls: number, items: number): string {
+  return [walls ? plural(walls, 'wall') : '', items ? plural(items, 'item') : ''].filter(Boolean).join(' and ');
+}
+
+/** Copy the selection (walls take their doors and windows along). False when there is nothing to copy. */
+export function copySelection(quiet = false): boolean {
   const plan = usePlanStore.getState();
+  const clip = clipOf(plan, liveSelection(plan, currentSelection()));
+  if (!clip) return false;
+  clipboard = { clip, pastes: 0 };
+  if (!quiet) toast(`Copied ${describe(clip.walls.length, clip.furniture.length)}.`, { ms: 1800 });
+  return true;
+}
+
+/** Add `clip`, moved by `delta`, to the plan as one undo step and select what was added. */
+function addClip(clip: Clip, delta: Point): PlanSelection | null {
+  if (!canEdit()) return null;
+  const plan = usePlanStore.getState();
+  const pasted = pasteClip(plan, clip, delta, () => crypto.randomUUID(), kindExists);
+  if (!pasted.walls.length && !pasted.furniture.length) {
+    toastError('Nothing to paste here: it is already in this exact spot.');
+    return null;
+  }
+  if (
+    plan.walls.length + pasted.walls.length > PLAN_LIMITS.walls ||
+    plan.openings.length + pasted.openings.length > PLAN_LIMITS.openings ||
+    plan.furniture.length + pasted.furniture.length > PLAN_LIMITS.furniture
+  ) {
+    toastError('That would make the plan too large.');
+    return null;
+  }
+  // One store write: one undo step.
+  usePlanStore.setState((s) => ({
+    walls: pasted.walls.length ? [...s.walls, ...pasted.walls] : s.walls,
+    openings: pasted.openings.length ? [...s.openings, ...pasted.openings] : s.openings,
+    furniture: pasted.furniture.length ? [...s.furniture, ...pasted.furniture] : s.furniture,
+    roomNames: Object.keys(pasted.roomNames).length ? { ...s.roomNames, ...pasted.roomNames } : s.roomNames,
+    customItems: Object.keys(pasted.customItems).length ? { ...s.customItems, ...pasted.customItems } : s.customItems,
+  }));
+  const ui = useUiStore.getState();
+  if (ui.tool !== 'select') ui.setTool('select');
+  selectOnPlan(pasted.selection);
+  return pasted.selection;
+}
+
+/**
+ * Paste the last copy: centred on `at` (the pointer) when there is one, else a
+ * grid step further down-right each time. Lands on the grid either way.
+ */
+export function pasteClipboard(at: Point | null): boolean {
+  if (!canEdit() || !clipboard) return false;
+  const { clip } = clipboard;
+  const plan = usePlanStore.getState();
+  const grid = plan.settings.gridSize > 0 ? plan.settings.gridSize : 0.5;
+  let delta: Point;
+  if (at && Number.isFinite(at.x) && Number.isFinite(at.y)) {
+    delta = snapPointTo({ x: at.x - clip.center.x, y: at.y - clip.center.y }, grid);
+  } else {
+    const n = clipboard.pastes + 1;
+    delta = { x: grid * n, y: grid * n };
+  }
+  const added = addClip(clip, delta);
+  if (!added) return false;
+  if (!at) clipboard.pastes++;
+  return true;
+}
+
+/** Copy the selection and remove it. */
+export function cutSelection(): boolean {
+  if (!canEdit() || !copySelection(true)) return false;
+  const { clip } = clipboard!;
+  deleteSelection();
+  toast(`Cut ${describe(clip.walls.length, clip.furniture.length)}.`, { ms: 1800 });
+  return true;
+}
+
+/**
+ * Copy the selection one grid step down-right and select the copies (walls
+ * with their doors and windows, furniture). The clipboard is left alone.
+ * Returns the ids of the furniture copies.
+ */
+export function duplicateSelection(): string[] {
+  if (!canEdit()) return [];
+  const plan = usePlanStore.getState();
+  const clip = clipOf(plan, liveSelection(plan, currentSelection()));
+  if (!clip) return [];
   const step = plan.settings.gridSize > 0 ? plan.settings.gridSize : 0.5;
-  const copies: Furniture[] = plan.furniture
-    .filter((f) => ui.selectedFurnitureIds.includes(f.id))
-    .map((f) => ({ ...f, id: crypto.randomUUID(), x: r3(f.x + step), y: r3(f.y + step) }));
-  if (!copies.length) return [];
-  usePlanStore.setState((s) => ({ furniture: [...s.furniture, ...copies] }));
-  const ids = copies.map((c) => c.id);
-  ui.setFurnitureSelection(ids);
-  return ids;
+  return addClip(clip, { x: step, y: step })?.furniture ?? [];
 }
 
 /** Remove whatever is selected. */
