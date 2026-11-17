@@ -33,6 +33,7 @@ import { averageLinear, TEXTURES, tintFor, type TextureId } from './surfaces';
 import { surfaceMaps } from './textureSet';
 import { mixHex } from './sun';
 import { pointInPolygon } from '../geometry';
+import { restHeights } from '../rest';
 import { withBounce } from './bounce';
 
 // ---------- materials ----------
@@ -845,6 +846,8 @@ export function buildRoofGroup(model: RoofModel, kit: MaterialKit, castShadow = 
 export function buildFurniture(furniture: Furniture[], kit: MaterialKit): THREE.Group {
   const group = new THREE.Group();
   group.name = 'furniture';
+  // Products dropped on a table or counter stand on its top.
+  const rest = restHeights(furniture);
   for (const item of furniture) {
     try {
       if (!finite(item.x, item.y, item.rotation)) continue;
@@ -856,7 +859,7 @@ export function buildFurniture(furniture: Furniture[], kit: MaterialKit): THREE.
       const g =
         (isBuiltinKind(item.kind) && buildModelItem(item.kind, def, furniturePalette(kit.style), kit.furniture)) ||
         buildItemGroup(def, kit.furniture, tint, true);
-      g.position.set(item.x, 0, item.y);
+      g.position.set(item.x, rest.get(item.id) ?? 0, item.y);
       g.rotation.y = -item.rotation;
       g.userData.key = `item-${item.id}`;
       g.name = nodeName('', item.label ? `${def.label} ${item.label}` : def.label, 'item');

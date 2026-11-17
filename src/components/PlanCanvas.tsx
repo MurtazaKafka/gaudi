@@ -9,6 +9,7 @@ import { useKeyStore } from '../ai/client';
 import { customId, furnitureDef, isCustomKind } from '../catalog';
 import { dist, midpoint, nearestWallPoint, ptEq, type SnapResult } from '../geometry';
 import { currentUnits, formatLength, parseLength, useUnits } from '../units';
+import { restHeights } from '../rest';
 import { toastError } from '../toast';
 import { theme } from '../theme';
 import type { DetectedRoom } from '../rooms';
@@ -627,13 +628,17 @@ export function PlanCanvas() {
     }
     return spots;
   }, [openings, walls, rooms, roomOutlines, roomNames, units, thickness, entrance, view.scale]);
-  // Rugs and other flat things go down first, so furniture stands on them.
+  // Rugs and other flat things go down first, so furniture stands on them;
+  // products resting on a table go last, so they show (and pick) above it.
   const drawOrder = useMemo(() => {
-    const flat = (f: Furniture): number => {
+    const rest = restHeights(furniture);
+    const layer = (f: Furniture): number => {
+      const lifted = rest.get(f.id);
+      if (lifted !== undefined) return 2 + lifted;
       const h = isCustomKind(f.kind) ? customItems[customId(f.kind)]?.h : furnitureDef(f.kind).h;
       return h !== undefined && h <= 0.06 ? 0 : 1;
     };
-    return furniture.some((f) => flat(f) === 0) ? [...furniture].sort((a, b) => flat(a) - flat(b)) : furniture;
+    return furniture.some((f) => layer(f) !== 1) ? [...furniture].sort((a, b) => layer(a) - layer(b)) : furniture;
   }, [furniture, customItems]);
 
   // The segment being drawn, and the length the status bar shows for it.
