@@ -137,7 +137,16 @@ vec3 bounceRoomIrradiance( const in int room, const in vec3 worldNormal, const i
   if ( bounceMode < 1.5 ) return sky * bounceSky;
   vec3 c[ 9 ];
   for ( int k = 0; k < 9; k ++ ) c[ k ] = texelFetch( bounceLight, ivec2( k, room ), 0 ).rgb;
-  vec3 e = max( shGetIrradianceAt( worldNormal, c ), vec3( 0.0 ) ) * bounceStrength;
+  vec3 e = max( shGetIrradianceAt( worldNormal, c ), vec3( 0.0 ) );
+  // A ceiling sees the floor and the lower walls. The one capture per room under-counts the sunlit
+  // floor, and a ceiling left to it sits like a dark lid: let it share most of what the walls get.
+  float bounceDown = smoothstep( 0.5, 0.95, - worldNormal.y );
+  if ( bounceDown > 0.0 ) {
+    vec3 side = 0.25 * ( shGetIrradianceAt( vec3( 1.0, 0.0, 0.0 ), c ) + shGetIrradianceAt( vec3( - 1.0, 0.0, 0.0 ), c )
+      + shGetIrradianceAt( vec3( 0.0, 0.0, 1.0 ), c ) + shGetIrradianceAt( vec3( 0.0, 0.0, - 1.0 ), c ) );
+    e = mix( e, max( e, max( side, vec3( 0.0 ) ) * 0.85 ), bounceDown );
+  }
+  e *= bounceStrength;
   e = mix( vec3( dot( e, vec3( 0.2126, 0.7152, 0.0722 ) ) ), e, bounceChroma );
   return e + sky * bounceSky;
 }`;
@@ -209,7 +218,7 @@ export function withBounce<T extends THREE.Material>(material: T): T {
       .replace('#include <lights_fragment_maps>', `#include <lights_fragment_maps>${FRAGMENT_MAIN}`);
     Object.assign(shader.uniforms, bounceUniforms);
   };
-  material.customProgramCacheKey = () => `${keyBefore()}|bounce1`;
+  material.customProgramCacheKey = () => `${keyBefore()}|bounce2`;
   material.needsUpdate = true;
   return material;
 }

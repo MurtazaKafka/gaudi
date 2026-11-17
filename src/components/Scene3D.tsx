@@ -41,13 +41,13 @@ import { LivePost } from '../three/LivePost';
 import { livePost } from '../three/postState';
 import { onTextureLoad } from '../three/textureSet';
 import { onModelLoad } from '../three/furnitureModels';
-import { backdropFor, horizonFor, onSkyLoad, skyFor, skyIdFor, zenithFor } from '../three/sky';
+import { backdropFor, horizonFor, onSkyLoad, skyFor, skyGain, skyIdFor, zenithFor } from '../three/sky';
 import { buildLawn, disposeGarden, lawnColor } from '../three/garden';
 import { buildPlanting } from '../three/plants';
 import { buildDecor } from '../three/decor';
 import { BounceLight } from '../three/BounceLight';
 import { buildGrounds } from '../three/grounds';
-import { applyPop, applyRise, calmMotion, keysOf, newcomers, POP_MS, RISE_MS } from '../three/rise';
+import { applyPop, applyRise, calmMotion, keysOf, newcomers, POP_MS, riseClock } from '../three/rise';
 import type { Pop } from '../three/rise';
 import { RenderOverlay } from '../three/render/RenderOverlay';
 import { useRenderStore } from '../three/render/renderStore';
@@ -254,10 +254,21 @@ function House({ plan }: { plan: ScenePlan }) {
   const rise = useRef(1);
   const { x: bx, z: bz, radius: br } = plan.bounds;
   const riseParts = useMemo(
-    () => ({ walls: wallsGroup, openings: openingsGroup, furniture: furnitureGroup, roof: roofGroup, x: bx, z: bz, radius: br }),
-    [wallsGroup, openingsGroup, furnitureGroup, roofGroup, bx, bz, br],
+    () => ({
+      walls: wallsGroup,
+      openings: openingsGroup,
+      furniture: furnitureGroup,
+      roof: roofGroup,
+      dressing: [decorGroup, lampsGroup],
+      x: bx,
+      z: bz,
+      radius: br,
+    }),
+    [wallsGroup, openingsGroup, furnitureGroup, roofGroup, decorGroup, lampsGroup, bx, bz, br],
   );
   useLayoutEffect(() => {
+    // Dev-only: the demo recorder slows one build down to show it.
+    if (import.meta.env.DEV) (window as unknown as { __rise?: unknown }).__rise = riseClock;
     if (calmMotion()) return;
     rise.current = 0;
     getThree().invalidate();
@@ -269,7 +280,7 @@ function House({ plan }: { plan: ScenePlan }) {
   useFrame(({ invalidate }, dt) => {
     if (rise.current >= 1) return;
     // Counted in drawn frames, not wall time: a slow first frame (shaders, textures) doesn't eat the build.
-    rise.current = Math.min(1, rise.current + (Math.min(dt, 0.05) * 1000) / RISE_MS);
+    rise.current = Math.min(1, rise.current + (Math.min(dt, 0.05) * 1000) / riseClock.ms);
     applyRise(riseParts, rise.current);
     if (rise.current < 1) invalidate();
   });
@@ -632,7 +643,7 @@ function Lights({ bounds }: { bounds: Bounds }) {
     scene.environmentRotation.set(0, turn, 0);
     // As the sun gets low the sky gives less light, so lamps and the low sun carry the evening.
     const dim = 1 - 0.72 * Math.pow(Math.abs(sunPhase(sunHour)), 2.2);
-    scene.environmentIntensity = SKY_LIGHT * style.ambient * dim;
+    scene.environmentIntensity = SKY_LIGHT * style.ambient * dim * skyGain(sunHour);
     if (showSky) {
       // Behind the house: a drawn sky, calm in every direction. The photograph only lights.
       scene.background = backdropFor(sunHour);

@@ -1,9 +1,10 @@
 /**
  * Time of day → light. Pure numbers and hex strings (no three.js).
  *
- * At noon the key light sits exactly where the maquette's studio lamp always
- * has, so the default look is unchanged; earlier and later it swings low
- * toward east and west, warms up and dims, and the sky follows.
+ * At noon the maquette's key light sits exactly where its studio lamp always
+ * has, behind the model; earlier and later it swings low toward east and
+ * west, warms up and dims, and the sky follows. A styled house gets the same
+ * arc mirrored to the front, so the sun lights the entrance side.
  */
 import type { HouseStyle } from './styles';
 import { SUN_MAX, SUN_MIN, SUN_NOON } from './viewStore';
@@ -67,7 +68,10 @@ export function sunState(hour: number, style: HouseStyle): SunState {
   const elevation = NOON_ELEVATION * Math.cos(phase * 1.46);
   const azimuth = NOON_AZIMUTH - phase * (phase < 0 ? 55 : 125) * DEG;
   const ce = Math.cos(elevation);
-  const dir: [number, number, number] = [ce * Math.cos(azimuth), Math.sin(elevation), ce * Math.sin(azimuth)];
+  // The maquette keeps its studio lamp behind the model, where its shadows read from above. A styled
+  // house stands under a real sky: the sun crosses in front of it, so the entrance side is the lit one.
+  const side = style.id === 'maquette' ? 1 : -1;
+  const dir: [number, number, number] = [ce * Math.cos(azimuth), Math.sin(elevation), side * ce * Math.sin(azimuth)];
 
   // 0 at noon → ~0.87 with the sun on the horizon.
   const low = 1 - Math.sin(elevation) / Math.sin(NOON_ELEVATION);

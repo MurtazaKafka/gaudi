@@ -8,11 +8,16 @@ import * as THREE from 'three';
 
 export const RISE_MS = 950;
 
+/** How long this build takes. Always RISE_MS in the app; a recording may slow one build down to show it. */
+export const riseClock = { ms: RISE_MS };
+
 export interface RiseParts {
   walls: THREE.Object3D | null;
   openings: THREE.Object3D | null;
   furniture: THREE.Object3D | null;
   roof: THREE.Object3D | null;
+  /** Pictures, rugs, lamps: they belong to finished rooms, so they wait for the walls. */
+  dressing?: (THREE.Object3D | null)[];
   /** Centre and half-size of the plan: the sweep runs corner to corner across it. */
   x: number;
   z: number;
@@ -67,8 +72,16 @@ export function applyRise(parts: RiseParts, t: number): void {
   each(parts.furniture, 0.22, 0.42, 0.3, 1.6, true);
   if (parts.roof) {
     const k = done ? 1 : settle((t - 0.62) / 0.38, 0.6);
-    parts.roof.position.y = (1 - k) * 1.4;
+    // A short drop: from the street the roof's underside is all you see of it until it lands.
+    parts.roof.position.y = (1 - k) * 0.7;
     parts.roof.visible = done || k > 0;
+  }
+  // The last wall is up at 0.82. A picture never hangs on a wall that is not there yet.
+  for (const g of parts.dressing ?? []) {
+    if (!g) continue;
+    const k = done ? 1 : settle((t - 0.82) / 0.18, 1.2);
+    g.visible = done || k > 0;
+    g.scale.y = done ? 1 : 0.92 + 0.08 * k;
   }
 }
 

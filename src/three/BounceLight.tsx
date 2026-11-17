@@ -22,7 +22,7 @@ import { useViewStore } from './viewStore';
 import { useRenderStore } from './render/renderStore';
 import { onSkyLoad } from './sky';
 import { onTextureLoad } from './textureSet';
-import { POP_MS, RISE_MS } from './rise';
+import { POP_MS, riseClock } from './rise';
 import { blankLightTable, bounceAll, bounceUniforms, buildRoomMap, disposeRoomMap, resetBounceUniforms } from './bounce';
 import type { RoomMap } from './bounce';
 
@@ -46,7 +46,8 @@ const HOT = 1.0;
 /** Longest stretch of capture work before the main thread is let go, ms. */
 const CHUNK_MS = 6;
 /** Once the house has risen (or a new piece has dropped in), capture what is really standing. */
-const SETTLED_MS = Math.max(RISE_MS, POP_MS) + 250;
+/** Long enough for a build or an edit to finish moving before the rooms' light is captured. */
+const settledMs = (): number => Math.max(riseClock.ms, POP_MS) + 250;
 
 /** The six ways the room is photographed: where it looks, and which way is up. */
 const FACES: [THREE.Vector3, THREE.Vector3][] = [
@@ -597,7 +598,7 @@ export function BounceLight({ rooms, open, wallHeight, layers }: BounceLightProp
   useEffect(() => {
     baker.current?.request();
     // A house still rising (or a piece still dropping in) is captured again once it stands.
-    baker.current?.request(SETTLED_MS);
+    baker.current?.request(settledMs());
   }, [layers]);
 
   return null;

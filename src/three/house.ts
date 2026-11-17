@@ -553,6 +553,8 @@ function buildDoor(o: PlacedOpening, kit: MaterialKit, exterior = false): THREE.
     const lw = clear / 2 - 0.003;
     hang('leaf', lw, -w / 2 + ft, 1);
     hang('leaf-2', lw, w / 2 - ft, -1);
+    // Where the pair meets: a strip over the joint, so no daylight shows between the leaves.
+    if (front) g.add(boxMesh('meeting-stile', kit.door, 0.034, lh - 0.004, 0.052, 0, o.y0 + sill + 0.006 + lh / 2, 0));
   } else {
     hang('leaf', clear, -w / 2 + ft, 1);
   }
@@ -595,7 +597,8 @@ function buildWindow(o: PlacedOpening, kit: MaterialKit, inside: 1 | -1 | 0 = 0)
  */
 function dressWindow(g: THREE.Group, o: PlacedOpening, kit: MaterialKit, inside: 1 | -1): void {
   const pal = furniturePalette(kit.style);
-  const id = [...o.id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) | 0, 7);
+  // Chosen by where the window is, not by its id: the same plan dresses the same way every time it is opened.
+  const id = (Math.round(o.x * 20) * 73856093) ^ (Math.round(o.y * 20) * 19349663);
   const pick = hash(id, 1, 2);
   const w = o.width;
   const h = o.y1 - o.y0;

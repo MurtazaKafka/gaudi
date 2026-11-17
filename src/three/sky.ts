@@ -102,8 +102,24 @@ export function skyFor(id: SkyId): Sky | null {
 
 /** Which sky an hour calls for: the low sun of early morning and evening gets the dusk sky. */
 export function skyIdFor(hour: number): SkyId {
-  return hour >= 17.5 || hour <= 7 ? 'dusk' : 'day';
+  return hour >= 18 || hour <= 7 ? 'dusk' : 'day';
 }
+
+/**
+ * How much of a sky's light to use at this hour. The dusk photograph lights a house far more than
+ * the day one does at the hour they change places, so it is eased in over the next hour (and out
+ * over the last one before morning) and the light never jumps.
+ */
+export function skyGain(hour: number): number {
+  const ease = (a: number, b: number): number => {
+    const t = Math.max(0, Math.min(1, (hour - a) / (b - a)));
+    return DUSK_START + (1 - DUSK_START) * t * t * (3 - 2 * t);
+  };
+  if (hour >= 18) return ease(18, 19);
+  if (hour <= 7) return ease(7, 6);
+  return 1;
+}
+const DUSK_START = 0.42;
 
 // ---------- what shows behind the house ----------
 
