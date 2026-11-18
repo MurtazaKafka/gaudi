@@ -31,7 +31,8 @@ export interface Clip {
 export function clipOf(plan: PlanData, sel: PlanSelection): Clip | null {
   const wallIds = new Set(sel.walls);
   const itemIds = new Set(sel.furniture);
-  const walls = plan.walls.filter((w) => wallIds.has(w.id)).map((w) => ({ id: w.id, a: { ...w.a }, b: { ...w.b } }));
+  // Every field is kept (a storey count, say), so a pasted wall is the same wall.
+  const walls = plan.walls.filter((w) => wallIds.has(w.id)).map((w) => ({ ...w, a: { ...w.a }, b: { ...w.b } }));
   const furniture = plan.furniture.filter((f) => itemIds.has(f.id)).map((f) => ({ ...f }));
   if (!walls.length && !furniture.length) return null;
 
@@ -99,7 +100,7 @@ export function pasteClip(
     if (plan.walls.some((x) => sameWall(x, a, b)) || walls.some((x) => sameWall(x, a, b))) continue;
     const id = newId();
     wallIds.set(w.id, id);
-    walls.push({ id, a, b });
+    walls.push({ ...w, id, a, b });
   }
 
   const openings: Opening[] = [];
