@@ -467,8 +467,21 @@ export function deleteSelection(): boolean {
  * `free` (⌥ held).
  */
 export function nudgeSelection(delta: Point, free = false): boolean {
-  const ui = useUiStore.getState();
   if (!canEdit()) return false;
+  // Walls move as a step of their own, so with walls in a mixed selection the
+  // whole press must be one: else one ⌘Z puts back the walls and leaves the
+  // rest. Without walls the moves are plain edits, which already merge into
+  // one step (and a held arrow into one step for the whole run).
+  if (!useUiStore.getState().selectedWallIds.length) return nudgeParts(delta, free);
+  let moved = false;
+  transact(() => {
+    moved = nudgeParts(delta, free);
+  });
+  return moved;
+}
+
+function nudgeParts(delta: Point, free: boolean): boolean {
+  const ui = useUiStore.getState();
   const plan = usePlanStore.getState();
   let moved = false;
 
