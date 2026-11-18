@@ -267,12 +267,23 @@ function buildPipeline(gl: THREE.WebGLRenderer, scene: THREE.Scene, camera: THRE
   };
 }
 
+/** While moving, the picture is drawn at most this dense: one buffer pixel to a screen point. */
+const DRAFT_RATIO = 1;
+/** A frame this soon after the last one (ms) is part of the same movement. */
+const MOVING_MS = 220;
+/** Still for this long (ms), the full picture is drawn. */
+const SETTLE_MS = 140;
+/** While only the camera moves, the sun's shadows are redrawn once in this many frames. */
+const SHADOW_EVERY = 4;
+
 export function LivePost() {
   const get = useThree((s) => s.get);
   const size = useThree((s) => s.size);
   const dpr = useThree((s) => s.viewport.dpr);
   const pipeline = useRef<Pipeline | null>(null);
   const failed = useRef(false);
+  /** What the last frame was drawn from, to tell a moving camera from a changed scene. */
+  const pace = useRef({ at: -Infinity, view: new THREE.Matrix4(), lens: new THREE.Matrix4(), settle: 0, owed: false, drafts: 0 });
 
   useEffect(() => {
     const { gl, scene, camera, invalidate } = get();
@@ -303,8 +314,12 @@ export function LivePost() {
   }, [size, dpr, get]);
 
   useEffect(() => {
-    const draw = (): void => {
-      const { gl, scene, camera, controls } = get();
+    /**
+     * `auto` (the view's own frames): a quick picture while things move, the full one once they
+     * stop. Anyone else asking for a frame (a snapshot) gets the full picture.
+     */
+    const draw = (auto = false): void => {
+      const { gl, scene, camera, controls, invalidate } = get();
       const p = pipeline.current;
       if (!p || failed.current) {
         gl.render(scene, camera);
@@ -312,18 +327,51 @@ export function LivePost() {
       }
       const cam = camera as THREE.PerspectiveCamera;
       const view = useViewStore.getState();
+
+      // Full or quick? A frame is quick when the camera has moved since the last one, or when it
+      // follows the last one closely (an animation, a slider being dragged). The full picture
+      // costs several times as much — shading, soft focus, every pixel of a dense screen — and is
+      // owed once nothing has asked for a frame for a moment.
+      const now = performance.now();
+      const t = pace.current;
+      const turned = !cam.matrixWorld.equals(t.view) || !cam.projectionMatrix.equals(t.lens);
+      let full = true;
+      if (auto && POST_TUNING.adaptive) {
+        if (t.owed) t.owed = false;
+        else if (turned || now - t.at < MOVING_MS) {
+          full = false;
+          window.clearTimeout(t.settle);
+          t.settle = window.setTimeout(() => {
+            t.owed = true;
+            invalidate();
+          }, SETTLE_MS);
+        }
+        t.at = now;
+      }
+      t.view.copy(cam.matrixWorld);
+      t.lens.copy(cam.projectionMatrix);
+      // Shadows depend on the sun and the scene, not on where the camera stands: while only the
+      // camera moves they are redrawn now and then (something may be moving too), not every frame.
+      t.drafts = full || !turned ? 0 : t.drafts + 1;
+      gl.shadowMap.autoUpdate = false;
+      gl.shadowMap.needsUpdate = full || !turned || t.drafts % SHADOW_EVERY === 0;
+
       // Sharp at whatever the camera is turning around: the house.
       const target = (controls as unknown as { target?: THREE.Vector3 } | null)?.target;
       p.focus.enabled = !view.walking && !!target;
+      p.ao.enabled = full;
       if (target) p.focus.uniforms.focus.value = Math.max(0.5, cam.position.distanceTo(target));
       p.focus.uniforms.near.value = cam.near;
       p.focus.uniforms.far.value = cam.far;
-      const ratio = gl.getPixelRatio();
-      p.focus.uniforms.maxBlur.value = POST_TUNING.maxBlur * ratio;
+      const ratio = full ? gl.getPixelRatio() : Math.min(gl.getPixelRatio(), DRAFT_RATIO);
+      // The quick picture keeps the darkened corners but not the soft focus (which reads the shading's depth).
+      // Soft focus is a close-up's effect: across a whole campus it would smear every far building, so it eases off with distance.
+      const reach = target ? cam.position.distanceTo(target) : 0;
+      p.focus.uniforms.maxBlur.value = full ? POST_TUNING.maxBlur * ratio * Math.min(1, 60 / Math.max(reach, 1)) : 0;
       p.focus.uniforms.band.value = POST_TUNING.focusBand;
       p.ao.blendIntensity = POST_TUNING.aoStrength;
       try {
-        // Snapshot changes the canvas density for one frame: follow it.
+        // Snapshot changes the canvas density for one frame, and the quick picture is coarser: follow it.
         if (ratio !== p.ratio) {
           p.ratio = ratio;
           p.composer.setPixelRatio(ratio);
@@ -342,14 +390,23 @@ export function LivePost() {
         gl.render(scene, camera);
       }
     };
-    livePost.draw = draw;
+    const fullDraw = (): void => draw(false);
+    livePost.draw = fullDraw;
+    livePost.frame = () => draw(true);
+    const t = pace.current;
     return () => {
-      if (livePost.draw === draw) livePost.draw = null;
+      window.clearTimeout(t.settle);
+      if (livePost.draw === fullDraw) {
+        livePost.draw = null;
+        livePost.frame = null;
+      }
+      const { gl } = get();
+      gl.shadowMap.autoUpdate = true;
     };
   }, [get]);
 
   // Taking a priority slot hands this component the drawing of every frame.
-  useFrame(() => livePost.draw?.(), 1);
+  useFrame(() => livePost.frame?.(), 1);
 
   return null;
 }

@@ -59,10 +59,18 @@ export function applyRise(parts: RiseParts, t: number): void {
   const done = t >= 1;
   const each = (group: THREE.Object3D | null, start: number, sweep: number, len: number, over: number, uniform: boolean): void => {
     if (!group) return;
+    if (group.userData.baked) {
+      // A layer folded into a few meshes (bake.ts) has no pieces to raise: it arrives whole, when its last piece would have.
+      group.visible = done || t >= start + sweep + len;
+      return;
+    }
     for (const child of group.children) {
       const k = done ? 1 : settle((t - start - along(child, parts) * sweep) / len, over);
       if (uniform) child.scale.setScalar(Math.max(k, 0.0001));
       else child.scale.y = Math.max(k, 0.0001);
+      // Something resting on a table grows with it, riding its top up rather than waiting in the air above it.
+      const restY = child.userData.restY;
+      if (typeof restY === 'number' && restY !== 0) child.position.y = restY * (done ? 1 : Math.max(k, 0));
       child.visible = done || k > 0;
     }
   };

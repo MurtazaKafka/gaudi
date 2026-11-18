@@ -523,10 +523,45 @@ function distToLoop(p: Point, loop: Point[]): number {
   return best;
 }
 
-/** How far a point is from the house (0 inside it). */
-function clearance(p: Point, outlines: Point[][]): number {
-  if (outlines.some((o) => pointInPolygon(p, o))) return 0;
-  return Math.min(...outlines.map((o) => distToLoop(p, o)), Infinity);
+interface Box {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+const outlineBoxes = new WeakMap<Point[][], Box[]>();
+
+/**
+ * How far a point is from the house (0 inside it), or `limit` if it is at least that far: callers
+ * only ever ask "nearer than so much?", and on a plan of many buildings almost every outline is
+ * too far to matter, so each is ruled out by the box around it before its sides are measured.
+ */
+function clearance(p: Point, outlines: Point[][], limit = Infinity): number {
+  let boxes = outlineBoxes.get(outlines);
+  if (!boxes) {
+    boxes = outlines.map((o) => {
+      const b: Box = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+      for (const q of o) {
+        b.x0 = Math.min(b.x0, q.x);
+        b.y0 = Math.min(b.y0, q.y);
+        b.x1 = Math.max(b.x1, q.x);
+        b.y1 = Math.max(b.y1, q.y);
+      }
+      return b;
+    });
+    outlineBoxes.set(outlines, boxes);
+  }
+  let best = limit;
+  for (let i = 0; i < outlines.length; i++) {
+    const b = boxes[i];
+    const dx = Math.max(b.x0 - p.x, 0, p.x - b.x1);
+    const dy = Math.max(b.y0 - p.y, 0, p.y - b.y1);
+    if (dx === 0 && dy === 0) {
+      if (pointInPolygon(p, outlines[i])) return 0;
+    } else if (dx * dx + dy * dy >= best * best) continue;
+    best = Math.min(best, distToLoop(p, outlines[i]));
+  }
+  return best;
 }
 
 function onStrip(p: Point, strip: Point[] | null, pad: number): boolean {
@@ -690,10 +725,28 @@ export function buildPlanting(site: SitePlan, centre: Point): THREE.Mesh | null 
     return across < e.width / 2 + 0.95 && out > -0.5 && out < 2.4;
   };
   // Everything with a footprint, so nothing grows into anything else.
-  const taken: { x: number; y: number; r: number }[] = [];
-  const roomFor = (p: Point, r: number): boolean => taken.every((t) => Math.hypot(t.x - p.x, t.y - p.y) > (t.r + r) * 0.8);
+  // Kept in a coarse grid: a campus has tens of thousands of plants, and each new one only needs its neighbours.
+  const CELL = 3;
+  const taken = new Map<number, { x: number; y: number; r: number }[]>();
+  let widest = 0;
+  const cellOf = (v: number): number => Math.floor(v / CELL);
+  const cellKey = (ix: number, iy: number): number => (ix + 32768) * 65536 + (iy + 32768);
+  const roomFor = (p: Point, r: number): boolean => {
+    const reach = (widest + r) * 0.8;
+    for (let ix = cellOf(p.x - reach); ix <= cellOf(p.x + reach); ix++) {
+      for (let iy = cellOf(p.y - reach); iy <= cellOf(p.y + reach); iy++) {
+        const cell = taken.get(cellKey(ix, iy));
+        if (cell && !cell.every((t) => Math.hypot(t.x - p.x, t.y - p.y) > (t.r + r) * 0.8)) return false;
+      }
+    }
+    return true;
+  };
   const take = (p: Point, r: number): void => {
-    taken.push({ x: p.x, y: p.y, r });
+    const key = cellKey(cellOf(p.x), cellOf(p.y));
+    const cell = taken.get(key);
+    if (cell) cell.push({ x: p.x, y: p.y, r });
+    else taken.set(key, [{ x: p.x, y: p.y, r }]);
+    widest = Math.max(widest, r);
   };
 
   // Two different pots either side of the front door: one tall, one low.
@@ -707,7 +760,7 @@ export function buildPlanting(site: SitePlan, centre: Point): THREE.Mesh | null 
       const along = e.width / 2 + (tall ? 0.5 : 0.64);
       const outward = tall ? 0.42 : 0.5;
       const p = { x: e.x + tx * along * side + e.nx * outward, y: e.y + ty * along * side + e.ny * outward };
-      if (keepClear(p, 0.2) || clearance(p, outlines) < 0.15) continue;
+      if (keepClear(p, 0.2) || clearance(p, outlines, 0.2) < 0.15) continue;
       if (tall) tallPot(b, p.x, p.y, 101 + side, spheres);
       else lowPot(b, p.x, p.y, 101 + side, spheres);
       take(p, tall ? 0.25 : 0.4);
@@ -720,7 +773,7 @@ export function buildPlanting(site: SitePlan, centre: Point): THREE.Mesh | null 
     const { a, t, n, width, seed } = run;
     const at = (s: number, v: number): Point => ({ x: a.x + t.x * s + n.x * v, y: a.y + t.y * s + n.y * v });
     const usable = (p: Point, pad: number): boolean =>
-      !keepClear(p, pad) && !atDoor(p) && clearance(p, outlines) >= GRAVEL_EDGE + 0.05 && inLot(p, 0.3);
+      !keepClear(p, pad) && !atDoor(p) && clearance(p, outlines, GRAVEL_EDGE + 0.1) >= GRAVEL_EDGE + 0.05 && inLot(p, 0.3);
     // The soil, a little mounded, its outer edge wandering.
     const step = 0.35;
     const chunks = Math.max(1, Math.round((run.to - run.from) / step));
@@ -808,7 +861,7 @@ export function buildPlanting(site: SitePlan, centre: Point): THREE.Mesh | null 
           const r = dr.r[k] * (0.9 + 0.2 * hash(pathSeed, di * 10 + k, 83));
           const off = wid / 2 + 0.3 + r + (k % 2) * 0.3;
           const p = { x: mid0.x + ux * len * f + vx * off * dr.side, y: mid0.y + uy * len * f + vy * off * dr.side };
-          if (!inLot(p, r * 0.5) || keepClear(p, r + 0.15) || clearance(p, outlines) < r + 0.6 || !roomFor(p, r)) return;
+          if (!inLot(p, r * 0.5) || keepClear(p, r + 0.15) || clearance(p, outlines, r + 0.7) < r + 0.6 || !roomFor(p, r)) return;
           shrub(b, p.x, p.y, pathSeed + di * 31 + k, r, dr.palette, spheres);
           take(p, r);
         });
@@ -866,14 +919,15 @@ export function buildPlanting(site: SitePlan, centre: Point): THREE.Mesh | null 
   ];
   const planted: { p: Point; R: number; side: number }[] = [];
   const reach = 4;
-  const gridStep = 0.8;
+  // Every 0.8 m on a house lot; coarser on a very large site, so the search stays about the same size.
+  const gridStep = Math.max(0.8, Math.sqrt(((lot.x1 - lot.x0 + 2 * reach) * (lot.y1 - lot.y0 + 2 * reach)) / 30000));
   for (const spec of specs) {
     const R = spec.form === 'column' ? spec.R : spec.R * 1.05;
     let best: { p: Point; score: number; side: number } | null = null;
     for (let x = lot.x0 - reach; x <= lot.x1 + reach; x += gridStep) {
       for (let y = lot.y0 - reach; y <= lot.y1 + reach; y += gridStep) {
         const p = { x, y };
-        const c = clearance(p, outlines);
+        const c = clearance(p, outlines, R + 44); // past that, farther is no worse
         // The crown stays off the roof.
         if (c < R * 0.8 + 0.7 || keepClear(p, 2) || !roomFor(p, 0.6)) continue;
         if (pathLine && segDist(p, pathLine.a, pathLine.c) < 2.5) continue;
@@ -950,7 +1004,7 @@ export function buildPlanting(site: SitePlan, centre: Point): THREE.Mesh | null 
     const spots: { p: Point; r: number; k: number }[] = [];
     members.forEach((m, k) => {
       const p = { x: corner.x + corner.sx * m.u, y: corner.y + corner.sy * m.v };
-      if (keepClear(p, m.r + 0.3) || clearance(p, outlines) < m.r + 0.8 || !roomFor(p, m.r)) return;
+      if (keepClear(p, m.r + 0.3) || clearance(p, outlines, m.r + 0.9) < m.r + 0.8 || !roomFor(p, m.r)) return;
       spots.push({ p, r: m.r, k });
     });
     if (spots.length % 2 === 0) spots.pop();
@@ -983,7 +1037,7 @@ export function buildPlanting(site: SitePlan, centre: Point): THREE.Mesh | null 
         const wallDir = k % 2 === 0 ? { x: (prev.x - p.x) / d1, y: (prev.y - p.y) / d1 } : { x: (next.x - p.x) / d2, y: (next.y - p.y) / d2 };
         const along = k === 0 ? 0 : 1.1;
         const q = { x: p.x + (ox / ol) * (sr + 0.3) + wallDir.x * along, y: p.y + (oy / ol) * (sr + 0.3) + wallDir.y * along };
-        if (keepClear(q, sr + 0.3) || clearance(q, outlines) < sr * 0.6 || atDoor(q) || !roomFor(q, sr)) continue;
+        if (keepClear(q, sr + 0.3) || clearance(q, outlines, sr * 0.6 + 0.1) < sr * 0.6 || atDoor(q) || !roomFor(q, sr)) continue;
         shrub(b, q.x, q.y, seed + k, sr, LEAF_COLORS.shrub, spheres);
         take(q, sr);
       }

@@ -14,6 +14,7 @@ import * as THREE from 'three';
 import type { Point } from '../types';
 import { hash } from './pieces';
 import type { RGB, V3 } from './pieces';
+import { isCampus } from './site';
 import type { SitePlan } from './site';
 
 // ---------- triangles with their own normals and colours ----------
@@ -621,7 +622,7 @@ export function buildSurroundings(site: SitePlan, height: (x: number, z: number)
   group.name = 'surroundings';
 
   const near = new Mesher();
-  layHedgerow(near, site, height);
+  if (!isCampus(site)) layHedgerow(near, site, height);
   layCopses(near, site, height);
   const nearGeo = near.geometry();
   if (nearGeo) {
@@ -638,7 +639,10 @@ export function buildSurroundings(site: SitePlan, height: (x: number, z: number)
   const cx = (lot.x0 + lot.x1) / 2;
   const cz = (lot.y0 + lot.y1) / 2;
   const span = Math.max(lot.x1 - lot.x0, lot.y1 - lot.y0);
-  const S = Math.max(1, Math.min(3, span / 30));
+  // The hills stand well clear of the lot: three sizes cover any house, and a site larger than
+  // that (a campus) pushes them out past its own corners instead of having them rise inside it.
+  const halfDiag = Math.hypot(lot.x1 - lot.x0, lot.y1 - lot.y0) / 2;
+  const S = Math.max(1, Math.min(3, span / 30), (halfDiag * 1.6) / 140);
   const far = new Mesher();
   hillRing(far, cx, cz, { radius: 140 * S, front: 45 * S, back: 40 * S, low: 4 * S, high: 15 * S, crestHaze: 0.62, foot: '#6d8150', crest: '#5d7445', trees: '#3f5637', wood: 0.5, seed: 11 }, height);
   hillRing(far, cx, cz, { radius: 240 * S, front: 60 * S, back: 50 * S, low: 14 * S, high: 40 * S, crestHaze: 0.8, foot: '#7a8b68', crest: '#68795f', trees: '#52654c', wood: 0.38, seed: 23 }, height);

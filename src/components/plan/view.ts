@@ -23,7 +23,8 @@ export interface Bounds {
   maxY: number;
 }
 
-export const MIN_SCALE = 16;
+/** Far enough out to see a whole campus (a kilometre and more across) on one screen. */
+export const MIN_SCALE = 0.4;
 export const MAX_SCALE = 320;
 export const DEFAULT_SCALE = 60;
 /** Zoom-to-fit never zooms in past this, so a single small room doesn't fill the screen. */

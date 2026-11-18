@@ -14,7 +14,7 @@ import type { Rect } from './footprint';
 import { offsetLoop } from './footprint';
 import { hash, lightOf, shade } from './pieces';
 import type { RGB, V3 } from './pieces';
-import { STEP_HEIGHT, STEP_HEIGHT_FLUSH } from './site';
+import { isCampus, STEP_HEIGHT, STEP_HEIGHT_FLUSH } from './site';
 import type { SitePlan } from './site';
 import { buildSurroundings, Mesher } from './surroundings';
 
@@ -183,7 +183,8 @@ function layGravel(m: Mesher, site: SitePlan, base: RGB): Point[][] {
       const nx = oa.x - a.x - tx * ((oa.x - a.x) * tx + (oa.y - a.y) * ty);
       const ny = oa.y - a.y - ty * ((oa.x - a.x) * tx + (oa.y - a.y) * ty);
       const nl = Math.hypot(nx, ny) || 1;
-      const count = Math.floor(len * GRAVEL * 260);
+      // Loose stones on the bed: a few hundred per house, a few hundred thousand per campus — which goes without.
+      const count = isCampus(site) ? 0 : Math.floor(len * GRAVEL * 260);
       for (let k = 0; k < count; k++) {
         const u = hash(i, k, 61) * len;
         const v = (0.03 + hash(i, k, 62) * 0.94) * GRAVEL;
@@ -567,7 +568,7 @@ export function buildGrounds(site: SitePlan, tone: { gravel: string; stone: stri
   layStep(m, site, stone);
   layPath(m, site, stone, green);
   layLane(m, site, earth, green, height);
-  layFence(m, site, wood, paint);
+  if (!isCampus(site)) layFence(m, site, wood, paint);
 
   const group = new THREE.Group();
   group.name = 'grounds';

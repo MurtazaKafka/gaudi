@@ -40,6 +40,8 @@ export interface LawnInput {
   margin: number;
   /** The fenced lot: mown inside, meadow outside. Read from the terrain's site when not given. */
   lot?: Rect;
+  /** Ground only, no blades or flowers: for a site so large (a campus) that they would be millions. */
+  bare?: boolean;
 }
 
 /** Where the lawn ends and the meadow begins, and what crosses the meadow. */
@@ -620,6 +622,7 @@ export function buildLawn(input: LawnInput): THREE.Group {
   group.name = 'garden';
   // Out past where the haze closes in, however far the camera pulls back.
   group.add(buildGround(input, Math.max(input.radius * 34, 420)));
+  if (input.bare) return group;
   const zones = zonesOf(input);
   const blades = buildBlades(input, zones);
   if (blades) group.add(blades);

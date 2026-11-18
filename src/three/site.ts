@@ -44,6 +44,15 @@ export interface SitePlan {
   skirts: { inner: Point[]; mid: Point[]; outer: Point[] }[];
 }
 
+/**
+ * A site far larger than any house's lot: many buildings on shared ground (a campus). It gets
+ * the lawn, the paths and the far hills, but not the things that belong to one garden — beds
+ * along every wall, a fence and a hedgerow round the lot — which there would run for kilometres.
+ */
+export function isCampus(site: SitePlan): boolean {
+  return Math.max(site.lot.x1 - site.lot.x0, site.lot.y1 - site.lot.y0) > 250;
+}
+
 export interface SiteInput {
   /** Every detected room, open-air ones included. */
   rooms: { polygon: Point[] }[];
