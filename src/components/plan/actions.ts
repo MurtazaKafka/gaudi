@@ -4,7 +4,7 @@
  */
 import { usePlanStore } from '../../store';
 import { useUiStore } from '../../uiStore';
-import { transact } from '../../history';
+import { beginGesture, endGesture, transact } from '../../history';
 import { dist, ptEq } from '../../geometry';
 import { furnitureDef, kindExists, type FurnitureDef } from '../../catalog';
 import { PLAN_LIMITS } from '../../plan';
@@ -12,10 +12,14 @@ import { detectRooms, type DetectedRoom } from '../../rooms';
 import { fitsAt, handOf, nearestFit, sweepFit, worldFor, type Hand, type World } from '../../solidity';
 import { carryRiders, restOf, restsOnAny, ridersOf } from '../../stacking';
 import { toast, toastError } from '../../toast';
-import type { Furniture, Point, RestMode, Wall } from '../../types';
+import { currentUnits } from '../../units';
+import type { Furniture, PlanData, Point, RestMode, Wall } from '../../types';
 import { clipOf, pasteClip, type Clip } from './clip';
+import { carryRoomNames, moveGroup, prepareGroupMove, type GroupMove, type Refusal } from './groupMove';
 import {
   boxOf,
+  groupSelected,
+  isGroupSelection,
   liveSelection,
   marqueeHits,
   mergeSelection,
@@ -24,6 +28,8 @@ import {
   type PlanSelection,
 } from './marquee';
 import {
+  dragDelta,
+  fineStep,
   junctionRefs,
   MIN_WALL,
   movedPoint,
@@ -468,6 +474,15 @@ export function deleteSelection(): boolean {
  */
 export function nudgeSelection(delta: Point, free = false): boolean {
   if (!canEdit()) return false;
+  const ui = useUiStore.getState();
+  // Walls with anything else, or several walls: the selection moves as one piece, as it drags.
+  if (ui.selectedWallIds.length && groupSelected(ui)) {
+    const d = beginGroupDrag();
+    if (!d) return false;
+    const moved = moveGroupDrag(d, delta, { lock: false, free: true, exact: true }) === 'moved';
+    endGroupDrag(d, 'drop');
+    return moved;
+  }
   // Walls move as a step of their own, so with walls in a mixed selection the
   // whole press must be one: else one ⌘Z puts back the walls and leaves the
   // rest. Without walls the moves are plain edits, which already merge into
@@ -518,4 +533,169 @@ function nudgeParts(delta: Point, free: boolean): boolean {
     moved = true;
   }
   return moved;
+}
+
+// ---------- moving the selection as one piece ----------
+
+/** What a refused move would have done, as the toast says it. */
+const REFUSED: Record<Refusal, string> = {
+  short: 'A wall joined to it would get too short.',
+  opening: 'A door or window would no longer fit on its wall.',
+  detach: 'It would come off a wall it is joined to.',
+  overlap: 'It would run into another wall.',
+};
+
+/** A move of the whole selection, from the press to the release. */
+export interface GroupDrag {
+  /** The plan as it was, to put back exactly (Esc, or furniture let go where it doesn't fit). */
+  readonly before: Pick<PlanData, 'walls' | 'openings' | 'furniture' | 'roomNames'>;
+  /** The walls, doors and windows: worked out once (groupMove.ts). */
+  readonly move: GroupMove;
+  /** The furniture in it, and whatever rests on that: where each started. */
+  readonly start: Map<string, Point>;
+  /**
+   * Furniture moving without walls is solid, as when it is dragged alone
+   * (solidity.ts): what it must fit among. With walls it goes with them.
+   */
+  readonly solid: InHand | null;
+  /** The move snaps to this: the grid with walls in it, the fine step without. */
+  readonly step: number;
+  /** The move on show, and whether ⌥ was down for it. */
+  shown: Point;
+  free: boolean;
+  /** Furniture: where it last fitted, and whether it fits now (drawn red when not). */
+  fit: Point;
+  blocked: boolean;
+  /** Why the last move asked for was refused (it then stays where it was), and whether the toast said so. */
+  refused: Refusal | null;
+  told: boolean;
+  /** Bridging walls' ids: the same all through the drag, so the canvas doesn't redraw them from scratch. */
+  readonly ids: Map<string, string>;
+  /** The bridges on show, to work out room names again only when they change. */
+  bridges: string;
+  /** What this drag last wrote: anything else in the store means the plan changed under it. */
+  wrote: Pick<PlanData, 'walls' | 'openings' | 'furniture'>;
+}
+
+/**
+ * Start moving the selection as one piece, when it is one that moves that
+ * way (`isGroupSelection`). Everything until `endGroupDrag` is one undo step.
+ */
+export function beginGroupDrag(): GroupDrag | null {
+  if (!canEdit()) return null;
+  const plan = usePlanStore.getState();
+  const sel = liveSelection(plan, currentSelection());
+  if (!isGroupSelection(sel)) return null;
+  const withWalls = sel.walls.length > 0;
+  const solid = !withWalls && sel.furniture.length ? takeInHand(sel.furniture) : null;
+  const before = { walls: plan.walls, openings: plan.openings, furniture: plan.furniture, roomNames: plan.roomNames };
+  beginGesture();
+  return {
+    before,
+    move: prepareGroupMove(plan, sel.walls, sel.openings),
+    start: solid ? solid.start : movingWith(sel.furniture),
+    solid,
+    step: withWalls ? (plan.settings.gridSize > 0 ? plan.settings.gridSize : 0.5) : fineStep(currentUnits()),
+    shown: { x: 0, y: 0 },
+    free: false,
+    fit: { x: 0, y: 0 },
+    blocked: false,
+    refused: null,
+    told: false,
+    ids: new Map(),
+    bridges: '',
+    wrote: before,
+  };
+}
+
+/**
+ * Show the selection moved by `raw` (plan meters from the press), snapped to
+ * the drag's step unless `exact`; `lock` keeps it to one axis, `free` lets
+ * furniture through things. A move that is refused leaves it where it was.
+ * 'lost' when the plan changed under the drag: end it, and leave the plan be.
+ */
+export function moveGroupDrag(
+  d: GroupDrag,
+  raw: Point,
+  opts: { lock: boolean; free: boolean; exact?: boolean },
+): 'moved' | 'held' | 'lost' {
+  const s = usePlanStore.getState();
+  if (!canEdit() || s.walls !== d.wrote.walls || s.openings !== d.wrote.openings || s.furniture !== d.wrote.furniture) {
+    return 'lost';
+  }
+  const delta = opts.exact ? raw : dragDelta(raw, d.step, opts.lock);
+  if (!Number.isFinite(delta.x) || !Number.isFinite(delta.y)) return 'held';
+  if (ptEq(delta, d.shown) && opts.free === d.free) return 'held';
+
+  const res = moveGroup(d.move, delta, (key) => {
+    let id = d.ids.get(key);
+    if (!id) d.ids.set(key, (id = crypto.randomUUID()));
+    return id;
+  });
+  if (!res.ok) {
+    d.refused = res.why;
+    if (!d.told) {
+      d.told = true;
+      toast(`Can’t move it that far: ${REFUSED[res.why].charAt(0).toLowerCase()}${REFUSED[res.why].slice(1)}`, { ms: 2600 });
+    }
+    return 'held';
+  }
+  d.refused = null;
+
+  // Furniture: with the walls, exactly; on its own, kept out of things (shown red where nothing near fits).
+  let go = delta;
+  d.blocked = false;
+  if (d.solid && !opts.free) {
+    const spot = nearestFit(d.solid.world, d.solid.hand, delta.x, delta.y, { from: { dx: d.fit.x, dy: d.fit.y } });
+    d.blocked = !spot.fits;
+    if (spot.fits) go = d.fit = { x: spot.dx, y: spot.dy };
+  }
+  const dx = r3(go.x);
+  const dy = r3(go.y);
+  // Back where it started: the very same list, so a drag that ends there leaves nothing behind.
+  const furnitureMoves = d.start.size > 0 && (dx !== 0 || dy !== 0);
+  const furniture = furnitureMoves
+    ? d.before.furniture.map((f) => {
+        const from = d.start.get(f.id);
+        return from ? { ...f, x: r3(from.x + dx), y: r3(from.y + dy) } : f;
+      })
+    : d.before.furniture;
+
+  // Room names follow a room whose walls changed (a bridge joined them) only when the bridges change.
+  const bridges = res.walls.length > d.before.walls.length ? res.walls.slice(d.before.walls.length).map((w) => w.id).join() : '';
+  const patch: Partial<PlanData> = { walls: res.walls, openings: res.openings, furniture };
+  if (bridges !== d.bridges) {
+    d.bridges = bridges;
+    patch.roomNames = bridges ? carryRoomNames(d.before.roomNames, d.before.walls, res.walls, roomsFor) : d.before.roomNames;
+  }
+  usePlanStore.setState(patch);
+  d.wrote = { walls: res.walls, openings: res.openings, furniture };
+  d.shown = delta;
+  d.free = opts.free;
+  return 'moved';
+}
+
+/**
+ * End the move. 'drop' keeps it — except furniture let go where nothing near
+ * fits, which puts everything back as it was; 'cancel' puts everything back;
+ * 'lost' leaves the plan as something else made it. Nothing moved, or put
+ * back: no undo step is left.
+ */
+export function endGroupDrag(d: GroupDrag, how: 'drop' | 'cancel' | 'lost'): void {
+  try {
+    if (how === 'lost' || d.wrote === d.before || !canEdit()) return;
+    const s = usePlanStore.getState();
+    if (s.walls !== d.wrote.walls || s.openings !== d.wrote.openings || s.furniture !== d.wrote.furniture) return;
+    // Let go where it started (moved, then brought back): nothing to tidy, and no undo step is left.
+    const home = s.walls === d.before.walls && s.openings === d.before.openings && s.furniture === d.before.furniture;
+    if (how === 'cancel' || d.blocked || home) {
+      usePlanStore.setState({ ...d.before });
+      return;
+    }
+    const names = carryRoomNames(d.before.roomNames, d.before.walls, s.walls, roomsFor);
+    if (names !== s.roomNames) usePlanStore.setState({ roomNames: names });
+    finishWallEdit();
+  } finally {
+    endGesture();
+  }
 }

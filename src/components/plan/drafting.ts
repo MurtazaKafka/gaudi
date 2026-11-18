@@ -289,6 +289,15 @@ export function snapPointTo(p: Point, step: number): Point {
   return { x: snapTo(p.x, step), y: snapTo(p.y, step) };
 }
 
+/**
+ * How far a drag has moved things: the pointer's travel `raw` (plan meters)
+ * snapped to `step`; with `lock`, kept to the axis it mostly runs along.
+ */
+export function dragDelta(raw: Point, step: number, lock: boolean): Point {
+  const d = lock ? (Math.abs(raw.x) >= Math.abs(raw.y) ? { x: raw.x, y: 0 } : { x: 0, y: raw.y }) : raw;
+  return snapPointTo(d, step);
+}
+
 /** Arrow key → a move of `step` in plan space (y grows down the screen). */
 export function arrowDelta(key: string, step: number): Point | null {
   switch (key) {

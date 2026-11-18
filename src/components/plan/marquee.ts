@@ -40,6 +40,24 @@ export function toggleInSelection(sel: PlanSelection, kind: keyof PlanSelection,
   return { ...sel, [kind]: ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id] };
 }
 
+/**
+ * A selection that moves as one piece when any selected part of it is
+ * dragged: two or more walls, or more than one kind of thing. One wall alone,
+ * doors and windows alone, and furniture alone keep their own drags.
+ */
+export function isGroupSelection(sel: PlanSelection): boolean {
+  const kinds = Number(sel.walls.length > 0) + Number(sel.openings.length > 0) + Number(sel.furniture.length > 0);
+  return sel.walls.length >= 2 || kinds >= 2;
+}
+
+/** `isGroupSelection` for the UI store's own fields. */
+export const groupSelected = (s: {
+  selectedWallIds: string[];
+  selectedOpeningIds: string[];
+  selectedFurnitureIds: string[];
+}): boolean =>
+  isGroupSelection({ walls: s.selectedWallIds, openings: s.selectedOpeningIds, furniture: s.selectedFurnitureIds });
+
 // ---------- the rectangle ----------
 
 /** An axis-aligned rectangle in plan meters, corners in order. */
