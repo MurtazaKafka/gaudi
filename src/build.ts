@@ -4,9 +4,17 @@
  *
  * Openings never use CSG: each wall splits into side pieces, lintels and
  * sills. Wall ends are mitred against their neighbours so corners close.
+ *
+ * A wall may rise several levels (levels.ts). It is built to its full height
+ * with its windows repeated on every level; a door stays on the ground with
+ * solid wall above it. Where walls of different heights meet, each keeps its
+ * own height: the joint is worked out band by band, so above a shorter wall
+ * the taller one's corner still closes, and the parts of a wall that stand
+ * above a lower neighbour's roof face outdoors.
  */
 import type { Opening, OpeningType, PlanSettings, Point, Wall } from './types';
-import { pointInPolygon, wallAngle, wallLength } from './geometry';
+import { wallAngle, wallLength } from './geometry';
+import { levelsOf, MAX_LEVELS, planLevels, roomLocator } from './levels';
 
 /** Top of a door opening above the floor (m), where the wall is tall enough. */
 export const DOOR_HEAD = 2.1;
@@ -74,20 +82,33 @@ function wallCuts(wall: Wall, openings: Opening[], len: number, settings: PlanSe
   return cuts;
 }
 
-function spansFromCuts(cuts: Cut[], len: number, H: number): Span[] {
+/**
+ * The solid stretches of a wall `H` high around its openings. A window is
+ * cut again on each of `levels` levels, `pitch` apart, at the same sill and
+ * head; a door only on the ground, with solid wall above it all the way up.
+ */
+function spansFromCuts(cuts: Cut[], len: number, H: number, pitch = H, levels = 1): Span[] {
   const spans: Span[] = [];
   let cursor = 0;
   for (const c of cuts) {
     if (c.left - cursor > MIN_PIECE) spans.push({ start: cursor, end: c.left, y0: 0, y1: H });
     if (c.y0 > MIN_PIECE) spans.push({ start: c.left, end: c.right, y0: 0, y1: c.y0 });
-    if (H - c.y1 > MIN_PIECE) spans.push({ start: c.left, end: c.right, y0: c.y1, y1: H });
+    const rows = c.opening.type === 'window' ? levels : 1;
+    // Between one level's window head and the sill of the window above it.
+    for (let k = 1; k < rows; k++) {
+      const y0 = c.y1 + (k - 1) * pitch;
+      const y1 = c.y0 + k * pitch;
+      if (y1 - y0 > MIN_PIECE) spans.push({ start: c.left, end: c.right, y0, y1 });
+    }
+    const head = c.y1 + (rows - 1) * pitch;
+    if (H - head > MIN_PIECE) spans.push({ start: c.left, end: c.right, y0: head, y1: H });
     cursor = c.right;
   }
   if (len - cursor > MIN_PIECE) spans.push({ start: cursor, end: len, y0: 0, y1: H });
   return spans;
 }
 
-/** Walls (+ openings) as plain boxes. Kept for callers that want simple blocks. */
+/** Walls (+ openings) as plain boxes, each wall at its own levels. Kept for callers that want simple blocks. */
 export function buildWallBoxes(walls: Wall[], openings: Opening[], settings: PlanSettings): WallBox[] {
   const boxes: WallBox[] = [];
   for (const wall of walls) {
@@ -96,7 +117,9 @@ export function buildWallBoxes(walls: Wall[], openings: Opening[], settings: Pla
     const angle = wallAngle(wall);
     const dx = (wall.b.x - wall.a.x) / len;
     const dy = (wall.b.y - wall.a.y) / len;
-    const spans = spansFromCuts(wallCuts(wall, openings, len, settings), len, settings.wallHeight);
+    const levels = levelsOf(wall);
+    const H = levels * settings.wallHeight;
+    const spans = spansFromCuts(wallCuts(wall, openings, len, settings), len, H, settings.wallHeight, levels);
     spans.forEach((s, i) => {
       const mid = (s.start + s.end) / 2;
       boxes.push({
@@ -120,19 +143,27 @@ export function buildWallBoxes(walls: Wall[], openings: Opening[], settings: Pla
  * A wall piece as a vertical prism. `poly` is its plan footprint (convex).
  * `sides[i]` says what the edge from poly[i] to poly[i+1] is:
  *  'p' / 'm' — the wall's two long faces (+normal / −normal side),
- *  'cap'     — an end (a free end, a door jamb, or a mitre hidden in a joint).
+ *  'cap'     — an end (a free end, a door jamb, or a mitre hidden in a joint),
+ *  'end'     — a wall's end standing in the open above a shorter wall it
+ *              meets: finished like the faces either side of it.
  */
 export interface WallPiece {
   key: string;
   wallId: string;
   poly: Point[];
-  sides: ('p' | 'm' | 'cap')[];
+  sides: ('p' | 'm' | 'cap' | 'end')[];
   y0: number;
   y1: number;
   /** The +normal long face looks outdoors (gets cladding). */
   pOuter: boolean;
   /** The −normal long face looks outdoors. */
   mOuter: boolean;
+  /**
+   * The piece stands on another piece of the same stretch of wall, cut where
+   * a neighbour's roof or a shorter wall stops. Which side of the wall is
+   * indoors is read from the pieces on the ground, not from these.
+   */
+  stacked?: boolean;
 }
 
 /** A door or window as cut, positioned for the frame/leaf/glass builders. */
@@ -147,15 +178,28 @@ export interface PlacedOpening {
   angle: number;
   /** Clear width as cut (m). */
   width: number;
+  /** The ground level's sill and head. */
   y0: number;
   y1: number;
   thickness: number;
   label?: string;
+  /** A window on a wall of several levels: how many rows of it there are, one per level (absent = 1)… */
+  levels?: number;
+  /** …and how far apart they are (m): the plan's wall height. */
+  pitch?: number;
 }
 
 export interface WallModel {
   pieces: WallPiece[];
   openings: PlacedOpening[];
+}
+
+/** How far above the ground row each row of an opening stands (m): just [0] for a door or a one-level wall. */
+export function openingRows(o: Pick<PlacedOpening, 'levels' | 'pitch'>): number[] {
+  const n = o.levels ?? 1;
+  const pitch = o.pitch ?? 0;
+  if (!(n > 1) || !(pitch > 0)) return [0];
+  return Array.from({ length: Math.min(n, MAX_LEVELS) }, (_, k) => k * pitch);
 }
 
 const NODE_GRID = 1e-3;
@@ -164,6 +208,13 @@ const nodeKey = (p: Point): string => `${Math.round(p.x / NODE_GRID)},${Math.rou
 interface Arm {
   wallId: string;
   /** direction away from the joint, radians */ angle: number;
+  /** how high this wall stands (m) */ top: number;
+}
+
+interface Join {
+  left: number;
+  right: number;
+  joined: boolean;
 }
 
 /**
@@ -171,7 +222,7 @@ interface Arm {
  * corner sits: positive = pulled back, negative = pushed past the joint.
  * `left` is the edge on the +90° side of the direction pointing away from the joint.
  */
-function joinAt(arms: Arm[], wallId: string, h: number): { left: number; right: number; joined: boolean } {
+function joinAt(arms: Arm[], wallId: string, h: number): Join {
   const me = arms.find((a) => a.wallId === wallId);
   if (!me || arms.length < 2) return { left: 0, right: 0, joined: false };
   const TWO_PI = Math.PI * 2;
@@ -195,6 +246,13 @@ function joinAt(arms: Arm[], wallId: string, h: number): { left: number; right: 
   return { left: corner(ccw), right: corner(cw), joined: true };
 }
 
+interface Tee {
+  p: number;
+  m: number;
+  /** How high the wall it butts into stands (m). */
+  top: number;
+}
+
 /**
  * For a wall end at `end` that lands on the interior of another wall: how far
  * each long edge (p = +normal side, m = −normal side) must pull back along
@@ -210,7 +268,8 @@ function teeTrim(
   nx: number,
   ny: number,
   h: number,
-): { p: number; m: number } | null {
+  topOf: (w: Wall) => number,
+): Tee | null {
   for (const other of walls) {
     if (other.id === wall.id) continue;
     const olen = wallLength(other);
@@ -227,15 +286,30 @@ function teeTrim(
     const nv = nx * vx + ny * vy;
     const limit = MITRE_LIMIT * h;
     const at = (off: number): number => Math.max(0, Math.min(limit, (face - off * nv) / dv));
-    return { p: at(h), m: at(-h) };
+    return { p: at(h), m: at(-h), top: topOf(other) };
   }
   return null;
 }
 
 /**
+ * How one end of a piece is finished: where its p and m edges stop (pulled
+ * back along the wall from the end), whether it is mitred to a point on the
+ * joint, and whether the end face is left standing in the open.
+ */
+interface End {
+  p: number;
+  m: number;
+  centre: boolean;
+  open: boolean;
+}
+
+const PLAIN: End = { p: 0, m: 0, centre: false, open: false };
+
+/**
  * Walls + openings as mitred prisms, plus each opening's placement. `rooms`
  * (detected room polygons) decide which faces count as exterior; without any
- * rooms every face is interior.
+ * rooms every face is interior. They also carry walls up where a taller roof
+ * needs closing in (levels.ts).
  */
 export function buildWallModel(
   walls: Wall[],
@@ -243,7 +317,8 @@ export function buildWallModel(
   settings: PlanSettings,
   rooms: { polygon: Point[] }[] = [],
 ): WallModel {
-  const H = settings.wallHeight;
+  /** One level. */
+  const P = settings.wallHeight;
   const h = settings.wallThickness / 2;
   const pieces: WallPiece[] = [];
   const placed: PlacedOpening[] = [];
@@ -253,6 +328,10 @@ export function buildWallModel(
       Number.isFinite(w.a.x) && Number.isFinite(w.a.y) && Number.isFinite(w.b.x) && Number.isFinite(w.b.y) &&
       wallLength(w) >= MIN_PIECE,
   );
+
+  const locate = roomLocator(rooms);
+  const levels = planLevels(usable, rooms, settings.wallThickness, locate);
+  const topOf = (w: Wall): number => levels.wall(w) * P;
 
   // Which walls meet at each endpoint.
   const nodes = new Map<string, Arm[]>();
@@ -264,12 +343,17 @@ export function buildWallModel(
   };
   for (const w of usable) {
     const ang = wallAngle(w);
-    addArm(w.a, { wallId: w.id, angle: ang });
-    addArm(w.b, { wallId: w.id, angle: ang + Math.PI });
+    const top = topOf(w);
+    addArm(w.a, { wallId: w.id, angle: ang, top });
+    addArm(w.b, { wallId: w.id, angle: ang + Math.PI, top });
   }
 
-  const outdoors = (p: Point): boolean =>
-    rooms.length > 0 && !rooms.some((r) => pointInPolygon(p, r.polygon));
+  /** How high the roof over a point stands: 0 outdoors. With no rooms at all, every face counts as indoors. */
+  const roofOver = (p: Point): number => {
+    if (rooms.length === 0) return Infinity;
+    const i = locate(p);
+    return i < 0 ? 0 : levels.rooms[i] * P;
+  };
 
   for (const wall of usable) {
     const len = wallLength(wall);
@@ -282,11 +366,14 @@ export function buildWallModel(
       x: wall.a.x + dx * s + nx * off,
       y: wall.a.y + dy * s + ny * off,
     });
+    const lv = levels.wall(wall);
+    const H = lv * P;
 
     const cuts = wallCuts(wall, openings, len, settings);
     for (const c of cuts) {
       const mid = (c.left + c.right) / 2;
       const p = at(mid, 0);
+      const rows = c.opening.type === 'window' ? lv : 1;
       placed.push({
         id: c.opening.id,
         wallId: wall.id,
@@ -299,6 +386,7 @@ export function buildWallModel(
         y1: c.y1,
         thickness: settings.wallThickness,
         ...(c.opening.label ? { label: c.opening.label } : {}),
+        ...(rows > 1 ? { levels: rows, pitch: P } : {}),
       });
     }
 
@@ -316,19 +404,20 @@ export function buildWallModel(
     }
     tees.sort((a, b) => a - b);
 
+    // What stands over each side: from this height up, that face is outdoors.
     const probe = h + 0.06;
-    const classify = (s0: number, s1: number): { p: boolean; m: boolean } => {
+    const classify = (s0: number, s1: number): { p: number; m: number } => {
       const mid = (s0 + s1) / 2;
-      return { p: outdoors(at(mid, probe)), m: outdoors(at(mid, -probe)) };
+      return { p: roofOver(at(mid, probe)), m: roofOver(at(mid, -probe)) };
     };
 
     // Split full-height runs at T-junctions, then merge neighbours that classify alike.
-    const spans: (Span & { p: boolean; m: boolean })[] = [];
-    for (const s of spansFromCuts(cuts, len, H)) {
+    const spans: (Span & { p: number; m: number })[] = [];
+    for (const s of spansFromCuts(cuts, len, H, P, lv)) {
       const full = s.y0 <= MIN_PIECE && s.y1 >= H - MIN_PIECE;
       const breaks = full ? tees.filter((t) => t > s.start + 0.02 && t < s.end - 0.02) : [];
       const stops = [s.start, ...breaks, s.end];
-      let run: (Span & { p: boolean; m: boolean }) | null = null;
+      let run: (Span & { p: number; m: number }) | null = null;
       for (let i = 0; i < stops.length - 1; i++) {
         const cls = classify(stops[i], stops[i + 1]);
         if (run && run.p === cls.p && run.m === cls.m) run.end = stops[i + 1];
@@ -340,60 +429,104 @@ export function buildWallModel(
       if (run) spans.push(run);
     }
 
-    const joinA = joinAt(nodes.get(nodeKey(wall.a)) ?? [], wall.id, h);
-    const joinB = joinAt(nodes.get(nodeKey(wall.b)) ?? [], wall.id, h);
+    const armsA = nodes.get(nodeKey(wall.a)) ?? [];
+    const armsB = nodes.get(nodeKey(wall.b)) ?? [];
+    const joinA = joinAt(armsA, wall.id, h);
+    const joinB = joinAt(armsB, wall.id, h);
     // An end that butts into the middle of another wall stops flush with that
     // wall's face — also when a second wall carries straight on from the far side.
-    const loose = (j: { left: number; right: number; joined: boolean }): boolean =>
-      !j.joined || (Math.abs(j.left) < 1e-6 && Math.abs(j.right) < 1e-6);
-    const teeA = loose(joinA) ? teeTrim(usable, wall, wall.a, dx, dy, nx, ny, h) : null;
-    const teeB = loose(joinB) ? teeTrim(usable, wall, wall.b, -dx, -dy, nx, ny, h) : null;
+    const loose = (j: Join): boolean => !j.joined || (Math.abs(j.left) < 1e-6 && Math.abs(j.right) < 1e-6);
+    const teeA = loose(joinA) ? teeTrim(usable, wall, wall.a, dx, dy, nx, ny, h, topOf) : null;
+    const teeB = loose(joinB) ? teeTrim(usable, wall, wall.b, -dx, -dy, nx, ny, h, topOf) : null;
+
+    /**
+     * One end of the band of a piece that starts `b0` up. `leftIsP`: at end A
+     * the direction away from the joint is +d, so "left" is the p side; at B it is −d.
+     */
+    const endOf = (arms: Arm[], join: Join, tee: Tee | null, b0: number, room: number, leftIsP: boolean): End => {
+      const mitre = (j: Join): End => {
+        const [p, m] = leftIsP ? [j.left, j.right] : [j.right, j.left];
+        return { p: Math.min(p, room), m: Math.min(m, room), centre: true, open: false };
+      };
+      // The walls of this joint that still stand at this height.
+      const here = arms.length >= 2 ? arms.filter((a) => a.wallId === wall.id || a.top > b0 + 1e-6) : arms;
+      if (here.length < arms.length) {
+        const j = joinAt(here, wall.id, h);
+        if (j.joined) return mitre(j);
+        // Above every other wall here: a square end reaching out to the joint's outer corner,
+        // so the corner stays closed where the shorter wall stops.
+        const reach = Math.min(Math.max(-2 * h, Math.min(join.left, join.right)), room);
+        return { p: reach, m: reach, centre: false, open: true };
+      }
+      if (join.joined && !tee) return mitre(join);
+      if (tee) {
+        const trim = (v: number): number => Math.max(0, Math.min(v, room));
+        return { p: trim(tee.p), m: trim(tee.m), centre: false, open: b0 >= tee.top - 1e-6 };
+      }
+      return PLAIN;
+    };
 
     spans.forEach((s, i) => {
       const room = Math.max(0, s.end - s.start - 0.004);
-      const poly: Point[] = [];
-      const sides: WallPiece['sides'] = [];
       const firstPiece = s.start <= MIN_PIECE;
       const lastPiece = s.end >= len - MIN_PIECE;
-      const atA = firstPiece && joinA.joined && !teeA;
-      const atB = lastPiece && joinB.joined && !teeB;
-      const trim = (v: number): number => Math.max(0, Math.min(v, room));
 
-      // At end A the direction away from the joint is +d, so "left" is the p side.
-      const aP = atA ? Math.min(joinA.left, room) : firstPiece && teeA ? trim(teeA.p) : 0;
-      const aM = atA ? Math.min(joinA.right, room) : firstPiece && teeA ? trim(teeA.m) : 0;
-      // At end B it is −d, so "left" is the m side.
-      const bM = atB ? Math.min(joinB.left, room) : lastPiece && teeB ? trim(teeB.m) : 0;
-      const bP = atB ? Math.min(joinB.right, room) : lastPiece && teeB ? trim(teeB.p) : 0;
-
-      // Walk the outline: p edge A→B, end B, m edge B→A, end A.
-      poly.push(at(s.start + aP, h));
-      sides.push('p');
-      poly.push(at(s.end - bP, h));
-      sides.push('cap');
-      if (atB) {
-        poly.push(at(s.end, 0));
-        sides.push('cap');
+      // Cut the piece where a neighbour's roof stops (above it, that face is outdoors) and, at the
+      // wall's ends, where a shorter wall it meets stops (above it, the joint is a different one).
+      const heights: number[] = [s.p, s.m];
+      const ends: [boolean, Arm[], Tee | null][] = [
+        [firstPiece, armsA, teeA],
+        [lastPiece, armsB, teeB],
+      ];
+      for (const [on, arms, tee] of ends) {
+        if (!on) continue;
+        if (arms.length >= 2) for (const a of arms) if (a.wallId !== wall.id) heights.push(a.top);
+        if (tee) heights.push(tee.top);
       }
-      poly.push(at(s.end - bM, -h));
-      sides.push('m');
-      poly.push(at(s.start + aM, -h));
-      sides.push('cap');
-      if (atA) {
-        poly.push(at(s.start, 0));
-        sides.push('cap');
+      const stops = [s.y0];
+      for (const y of heights.filter((y) => y > s.y0 + MIN_PIECE && y < s.y1 - MIN_PIECE).sort((a, b) => a - b)) {
+        if (y - stops[stops.length - 1] > 1e-4) stops.push(y);
       }
+      stops.push(s.y1);
 
-      pieces.push({
-        key: `${wall.id}:${i}`,
-        wallId: wall.id,
-        poly,
-        sides,
-        y0: s.y0,
-        y1: s.y1,
-        pOuter: s.p,
-        mOuter: s.m,
-      });
+      for (let j = 0; j < stops.length - 1; j++) {
+        const b0 = stops[j];
+        const b1 = stops[j + 1];
+        const a = firstPiece ? endOf(armsA, joinA, teeA, b0, room, true) : PLAIN;
+        const b = lastPiece ? endOf(armsB, joinB, teeB, b0, room, false) : PLAIN;
+        const poly: Point[] = [];
+        const sides: WallPiece['sides'] = [];
+
+        // Walk the outline: p edge A→B, end B, m edge B→A, end A.
+        poly.push(at(s.start + a.p, h));
+        sides.push('p');
+        poly.push(at(s.end - b.p, h));
+        sides.push(b.open ? 'end' : 'cap');
+        if (b.centre) {
+          poly.push(at(s.end, 0));
+          sides.push('cap');
+        }
+        poly.push(at(s.end - b.m, -h));
+        sides.push('m');
+        poly.push(at(s.start + a.m, -h));
+        sides.push(a.open ? 'end' : 'cap');
+        if (a.centre) {
+          poly.push(at(s.start, 0));
+          sides.push('cap');
+        }
+
+        pieces.push({
+          key: j === 0 ? `${wall.id}:${i}` : `${wall.id}:${i}.${j}`,
+          wallId: wall.id,
+          poly,
+          sides,
+          y0: b0,
+          y1: b1,
+          pOuter: b0 >= s.p - 1e-6,
+          mOuter: b0 >= s.m - 1e-6,
+          ...(j > 0 ? { stacked: true } : {}),
+        });
+      }
     });
   }
 

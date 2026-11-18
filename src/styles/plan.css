@@ -53,6 +53,12 @@
   height: 22px;
 }
 
+/* "On top" / "On the floor": a quiet word, accented while the item stands on something */
+.plan-inspector .plan-inspector-rest {
+  padding: 3px 6px;
+  letter-spacing: 0.04em;
+}
+
 .plan-inspector-btn:hover:not(:disabled) {
   color: var(--accent);
   background: var(--accent-soft);

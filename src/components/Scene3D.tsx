@@ -8,9 +8,11 @@ import { usePlanStore } from '../store';
 import { useUiStore } from '../uiStore';
 import { useKeyStore } from '../ai/client';
 import { buildWallModel, wallBlockers } from '../build';
+import { levelsOf } from '../levels';
 import type { WallModel } from '../build';
 import { furnitureDef } from '../catalog';
 import { partsBounds } from '../customItems';
+import { restOf } from '../stacking';
 import { detectRooms } from '../rooms';
 import type { DetectedRoom } from '../rooms';
 import { downloadBlob } from '../serialize';
@@ -34,7 +36,8 @@ import { openAirRooms } from '../three/footprint';
 import { chooseRoof, chooseStyle } from '../three/lookActions';
 import { buildRoof } from '../three/roof';
 import { SceneBar } from '../three/SceneBar';
-import { buildSite, planSite } from '../three/site';
+import { buildSite, isCampus, planSite } from '../three/site';
+import { bakeIfLarge } from '../three/bake';
 import { capturePng, fileSlug } from '../three/snapshot';
 import { PathTrace } from '../three/render/PathTrace';
 import { LivePost } from '../three/LivePost';
@@ -98,15 +101,22 @@ interface Bounds {
   x: number;
   z: number;
   radius: number;
+  /** How much higher than one level the tallest wall stands (m; levels.ts): 0 for a plan of one storey. */
+  lift: number;
 }
 
-function planBounds(walls: Wall[]): Bounds {
-  if (walls.length === 0) return { x: 0, z: 0, radius: 6 };
+/** How far the camera steps back, and the sun's shadow reaches up, per metre of `lift`. */
+const LIFT_REACH = 0.6;
+
+function planBounds(walls: Wall[], wallHeight: number): Bounds {
+  if (walls.length === 0) return { x: 0, z: 0, radius: 6, lift: 0 };
   let minX = Infinity;
   let maxX = -Infinity;
   let minY = Infinity;
   let maxY = -Infinity;
+  let levels = 1;
   for (const w of walls) {
+    levels = Math.max(levels, levelsOf(w));
     for (const p of [w.a, w.b]) {
       minX = Math.min(minX, p.x);
       maxX = Math.max(maxX, p.x);
@@ -118,15 +128,18 @@ function planBounds(walls: Wall[]): Bounds {
     x: (minX + maxX) / 2,
     z: (minY + maxY) / 2,
     radius: Math.min(500, Math.max((maxX - minX) / 2, (maxY - minY) / 2, 3)),
+    lift: (levels - 1) * wallHeight,
   };
 }
 
-/** The camera that looks down into the house from the south-east, as far back as the lens needs to frame it. */
+/** The camera that looks down into the house from the south-east, as far back as the lens needs to frame it (tall buildings too). */
 function defaultPose(b: Bounds, fitNonce: number): CameraPose {
-  const k = b.radius * lensReach(useViewStore.getState().lens);
+  const k = (b.radius + b.lift * LIFT_REACH) * lensReach(useViewStore.getState().lens);
+  // Aimed partway up a tall building rather than at its foot, so its top stays in the picture.
+  const up = b.lift * 0.4;
   return {
-    position: [b.x + k * 1.4, k * 2.3, b.z + k * 1.8],
-    target: [b.x, 0, b.z],
+    position: [b.x + k * 1.4, k * 2.3 + up, b.z + k * 1.8],
+    target: [b.x, up, b.z],
     fitNonce,
   };
 }
@@ -155,7 +168,7 @@ function useScenePlan(): ScenePlan {
     () => buildWallModel(walls, openings, settings, indoorRooms(rooms, open)),
     [walls, openings, settings, rooms, open],
   );
-  const bounds = useMemo(() => planBounds(walls), [walls]);
+  const bounds = useMemo(() => planBounds(walls, settings.wallHeight), [walls, settings.wallHeight]);
   return useMemo(
     () => ({ walls, settings, rooms, open, model, bounds }),
     [walls, settings, rooms, open, model, bounds],
@@ -181,11 +194,17 @@ function House({ plan }: { plan: ScenePlan }) {
 
   const { walls, settings, rooms, open, model } = plan;
   const style = styleById(styleId);
-  const kit = useMemo(() => materialKit(style), [style]);
+  // A house is laid brick by brick and tile by tile. A plan of many buildings (a campus) would be
+  // millions of pieces: there the walls and roofs keep their photographed material and stay smooth.
+  const many = plan.bounds.radius > 150;
+  const kit = useMemo(() => materialKit(many ? { ...style, siding: undefined, roofing: undefined } : style), [style, many]);
 
-  const wallsGroup = useMemo(() => buildWalls(model, kit, true), [model, kit]);
-  const openingsGroup = useMemo(() => buildOpenings(model.openings, kit, model.pieces), [model, kit]);
-  const floorsGroup = useMemo(() => buildFloors(rooms, roomNames ?? {}, kit, open), [rooms, roomNames, kit, open]);
+  // A large layer is folded into one mesh per material (see bake.ts): the same picture, drawn in a
+  // few dozen calls instead of tens of thousands. The pieces are gone then, so it neither builds
+  // itself in nor animates edits.
+  const wallsGroup = useMemo(() => bakeIfLarge(buildWalls(model, kit, true), many), [model, kit, many]);
+  const openingsGroup = useMemo(() => bakeIfLarge(buildOpenings(model.openings, kit, model.pieces), many), [model, kit, many]);
+  const floorsGroup = useMemo(() => bakeIfLarge(buildFloors(rooms, roomNames ?? {}, kit, open), many), [rooms, roomNames, kit, open, many]);
   // Furniture models arrive after the first build; build again when one does.
   const [modelsVersion, setModelsVersion] = useState(0);
   useEffect(() => onModelLoad(() => setModelsVersion((v) => v + 1)), []);
@@ -193,8 +212,8 @@ function House({ plan }: { plan: ScenePlan }) {
     void modelsVersion;
     // furnitureDef reads a mirror of customItems, so a changed definition must rebuild.
     void customItems;
-    return buildFurniture(Array.isArray(furniture) ? furniture : [], kit);
-  }, [furniture, customItems, kit, modelsVersion]);
+    return bakeIfLarge(buildFurniture(Array.isArray(furniture) ? furniture : [], kit), many);
+  }, [furniture, customItems, kit, modelsVersion, many]);
 
   // Dollhouse looks in; Exterior has the roof on; a walk gets ceilings, and the
   // roof too if the house has one (it casts nothing then, so rooms stay sunlit).
@@ -203,8 +222,8 @@ function House({ plan }: { plan: ScenePlan }) {
   const roofKind = effectiveRoof(planRoof, style, roofOn);
   const roofGroup = useMemo(
     () =>
-      roofKind === 'none' ? null : buildRoofGroup(buildRoof(roofKind, { rooms, walls, settings, open }), kit, !walking),
-    [roofKind, rooms, walls, settings, open, kit, walking],
+      roofKind === 'none' ? null : bakeIfLarge(buildRoofGroup(buildRoof(roofKind, { rooms, walls, settings, open }), kit, !walking), many),
+    [roofKind, rooms, walls, settings, open, kit, walking, many],
   );
   const ceilingsGroup = useMemo(
     () => (walking ? buildCeilings(rooms, settings.wallHeight, kit, open) : null),
@@ -217,8 +236,8 @@ function House({ plan }: { plan: ScenePlan }) {
   // The glowing window panes only make sense seen from outside, with the roof on.
   const panes = view === 'exterior' && !walking;
   const lampsGroup = useMemo(
-    () => (lit ? buildRoomLamps(rooms, settings.wallHeight, open, model.openings, model.pieces, panes) : null),
-    [lit, rooms, settings.wallHeight, open, model, panes],
+    () => (lit ? bakeIfLarge(buildRoomLamps(rooms, settings.wallHeight, open, model.openings, model.pieces, panes), many) : null),
+    [lit, rooms, settings.wallHeight, open, model, panes, many],
   );
   useDisposal(lampsGroup);
 
@@ -226,7 +245,8 @@ function House({ plan }: { plan: ScenePlan }) {
   const details = useViewStore((s) => s.details);
   const decorGroup = useMemo(
     () =>
-      details && style.id !== 'maquette'
+      // Room details are worked out room against room; a plan of many buildings goes without them.
+      details && style.id !== 'maquette' && plan.bounds.radius <= 150
         ? buildDecor({
             rooms,
             roomNames: roomNames ?? {},
@@ -239,7 +259,7 @@ function House({ plan }: { plan: ScenePlan }) {
             evening: lit,
           })
         : null,
-    [details, style, rooms, roomNames, furniture, model, settings, open, lit],
+    [details, style, rooms, roomNames, furniture, model, settings, open, lit, plan.bounds.radius],
   );
   useDisposal(decorGroup);
   const bounceLayers = useMemo(
@@ -269,10 +289,10 @@ function House({ plan }: { plan: ScenePlan }) {
   useLayoutEffect(() => {
     // Dev-only: the demo recorder slows one build down to show it.
     if (import.meta.env.DEV) (window as unknown as { __rise?: unknown }).__rise = riseClock;
-    if (calmMotion()) return;
+    if (calmMotion() || many) return;
     rise.current = 0;
     getThree().invalidate();
-  }, [fitNonce, getThree]);
+  }, [fitNonce, getThree, many]);
   // Anything rebuilt mid-build (a furniture model arriving) joins at the same moment of it.
   useLayoutEffect(() => {
     applyRise(riseParts, rise.current);
@@ -328,7 +348,8 @@ function House({ plan }: { plan: ScenePlan }) {
 
   return (
     <>
-      {view === 'dollhouse' && !walking && <RoomPicker floors={floorsGroup} solids={solids} />}
+      {/* Pointing at a room needs each floor as its own piece: not on a plan large enough to be folded together. */}
+      {view === 'dollhouse' && !walking && !many && <RoomPicker floors={floorsGroup} solids={solids} />}
       {/* Keyed by the object itself: a rebuilt layer is unmounted and mounted, there and then. Left to swap
           in place, react-three-fiber holds the swap back until a later commit whenever the layer is not the
           last child, and the house would show its previous look. */}
@@ -340,7 +361,8 @@ function House({ plan }: { plan: ScenePlan }) {
       {ceilingsGroup && <primitive key={ceilingsGroup.uuid} object={ceilingsGroup} />}
       {lampsGroup && <primitive key={lampsGroup.uuid} object={lampsGroup} />}
       {decorGroup && <primitive key={decorGroup.uuid} object={decorGroup} />}
-      <BounceLight rooms={rooms} open={open} wallHeight={settings.wallHeight} layers={bounceLayers} />
+      {/* Captured room by room: a campus of a thousand rooms goes without, and is lit by the sky alone. */}
+      {!many && <BounceLight rooms={rooms} open={open} wallHeight={settings.wallHeight} layers={bounceLayers} />}
     </>
   );
 }
@@ -554,8 +576,9 @@ function Site({ plan }: { plan: ScenePlan }) {
       keepOut,
       gap: half + 0.04,
       margin: half + 0.6,
+      bare: isCampus(sitePlan),
     });
-    const planting = buildPlanting(sitePlan, { x, y: z });
+    const planting = isCampus(sitePlan) ? null : buildPlanting(sitePlan, { x, y: z });
     if (planting) lawn.add(planting);
     if (grounds.mesh) lawn.add(grounds.mesh);
     return lawn;
@@ -614,9 +637,11 @@ function Lights({ bounds }: { bounds: Bounds }) {
   const style = styleById(styleId);
   const sun = useMemo(() => sunState(sunHour, style), [sunHour, style]);
   const target = useMemo(() => new THREE.Object3D(), []);
-  const { x, z, radius } = bounds;
-  const reach = radius * LAMP_DISTANCE;
-  const span = radius * 2.2;
+  const { x, z, radius, lift } = bounds;
+  // A tall building needs the sun further off and its shadow box wider and deeper, or its top is left unshadowed.
+  const reach = (radius + lift) * LAMP_DISTANCE;
+  const span = radius * 2.2 + lift;
+  const depth = (radius + lift) * 8;
 
   // Styled looks are lit by a photographed sky; the maquette keeps its studio lamp.
   const view = useViewStore((s) => s.view);
@@ -726,7 +751,7 @@ function Lights({ bounds }: { bounds: Bounds }) {
         shadow-normalBias={0.02}
         shadow-radius={2.5}
       >
-        <orthographicCamera attach="shadow-camera" args={[-span, span, span, -span, 0.5, radius * 8]} />
+        <orthographicCamera attach="shadow-camera" args={[-span, span, span, -span, 0.5, depth]} />
       </directionalLight>
       {/* The maquette's studio fill. The styled looks have none: a shadowless light from a fixed side lit
           every wall facing the camera as if in sun, and the house lost its shape. */}
@@ -895,11 +920,12 @@ function CameraRig({ bounds, start }: { bounds: Bounds; start: CameraPose }) {
     const [fx, fz] = front;
     // To the right of someone leaving by the front door.
     const [sx, sz] = [-fz, fx];
-    const r = b.radius;
+    // Further back, and aimed a little higher, for a building of several levels.
+    const r = b.radius + b.lift * LIFT_REACH;
     // Further back with a long lens, closer with a wide one, so each shot frames the house the same.
     const k = lensReach(useViewStore.getState().lens);
     let position: [number, number, number];
-    let target: [number, number, number] = [b.x, 1.1, b.z];
+    let target: [number, number, number] = [b.x, 1.1 + b.lift * 0.4, b.z];
     if (shot === 'street') position = [b.x + (fx * 2.6 + sx * 0.5) * r * k, 1.65, b.z + (fz * 2.6 + sz * 0.5) * r * k];
     else if (shot === 'corner') {
       position = [b.x + (fx * 2.5 + sx * 2.2) * r * k, 1.1 + (r * 0.8 + 1.4) * k, b.z + (fz * 2.5 + sz * 2.2) * r * k];
@@ -944,6 +970,22 @@ function CameraRig({ bounds, start }: { bounds: Bounds; start: CameraPose }) {
     onChange();
     get().invalidate();
   }, [onChange, get]);
+
+  // How deep the camera sees. A house fits well inside the default; a plan of many buildings (a
+  // campus) stands farther back than that, and its near side can be pushed out while orbiting, which
+  // keeps distant roofs from flickering. On foot the near side stays at arm's length.
+  useLayoutEffect(() => {
+    const { camera, invalidate } = get();
+    if (!(camera instanceof THREE.PerspectiveCamera)) return;
+    const large = bounds.radius > 150;
+    const far = Math.max(1000, bounds.radius * 40);
+    const near = large && !walking ? 1 : 0.1;
+    if (camera.far === far && camera.near === near) return;
+    camera.far = far;
+    camera.near = near;
+    camera.updateProjectionMatrix();
+    invalidate();
+  }, [get, bounds.radius, walking]);
 
   // Zoom toward whatever is under the pointer, as if grabbing it. Not while verticals are straightened:
   // the picture is shifted for drawing only, so the controls would aim at a different spot than the one shown.
@@ -1341,10 +1383,13 @@ function useSceneInputs(): { plan: ScenePlan; start: CameraPose; world: WalkWorl
     () => wallBlockers(plan.walls, openings, plan.settings),
     [plan.walls, openings, plan.settings],
   );
-  // What a walker goes round: anything standing on the floor that is more than a step high.
+  // What a walker goes round: anything standing on the floor that is more than a step high. A plate on
+  // a table is not in the way of anything the table isn't.
   const obstacles = useMemo(() => {
     void customItems; // furnitureDef reads a mirror of these
-    return furnitureObstacles(Array.isArray(furniture) ? furniture : [], (kind) => {
+    const all = Array.isArray(furniture) ? furniture : [];
+    const rest = restOf(all, furnitureDef);
+    return furnitureObstacles(all.filter((f) => !rest.get(f.id)?.on), (kind) => {
       const def = furnitureDef(kind);
       if (!def || !Array.isArray(def.parts) || def.parts.length === 0) return null;
       const b = partsBounds(def.parts);

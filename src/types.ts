@@ -10,6 +10,13 @@ export interface Wall {
   id: string;
   a: Point;
   b: Point;
+  /**
+   * Storeys this wall rises, a whole number from 1 to 12 (absent = 1): it
+   * stands `levels × settings.wallHeight` high, and its windows repeat on
+   * every level. The outside of a building only; inside, rooms stay one
+   * level high (see levels.ts).
+   */
+  levels?: number;
 }
 
 export type OpeningType = 'door' | 'window';
@@ -25,7 +32,16 @@ export interface Opening {
   label?: string;
 }
 
-/** A placed furniture item: center position in plan meters, rotation in radians. */
+/**
+ * Whether an item stands on what is beneath it: 'top' on whatever can carry
+ * it, 'floor' never lifted. Absent = guessed from what it is (see stacking.ts).
+ */
+export type RestMode = 'floor' | 'top';
+
+/**
+ * A placed furniture item: center position in plan meters, rotation in radians.
+ * There is no height: how high it stands is derived from what is under it (stacking.ts).
+ */
 export interface Furniture {
   id: string;
   kind: FurnitureKind;
@@ -34,6 +50,8 @@ export interface Furniture {
   rotation: number;
   /** Optional annotation shown on the plan (e.g. "#7", "Stage"). */
   label?: string;
+  /** Overrides the guess of whether it rests on top of what is beneath it. */
+  rest?: RestMode;
 }
 
 /** Display units. Everything is stored in meters; this only changes how lengths read. */

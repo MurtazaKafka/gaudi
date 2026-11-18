@@ -11,7 +11,7 @@
  */
 import type * as THREE from 'three';
 import type { Point } from '../types';
-import { pointInRegions } from './footprint';
+import { pointInRegion, pointInRegions } from './footprint';
 import { add, clipToBox, convexHull, cross, dot, hash, lightOf, polygonArea, shade, Soup, sub, unit } from './pieces';
 import type { P2, RGB, V3 } from './pieces';
 import type { RoofModel } from './roof';
@@ -308,7 +308,8 @@ export function buildRoofPieces(model: RoofModel, roofing: Roofing, color: strin
   if (faces.length === 0) return null;
   const soup = new Soup();
   const base = lightOf(color);
-  for (const face of faces) layFace(soup, face, model.eave, roofing, base, faces);
+  // Each roof is coursed from the walls it stands on: a taller building's from higher up.
+  for (const face of faces) layFace(soup, face, model.solids[face.solid ?? -1]?.eave ?? model.eave, roofing, base, faces);
   layCaps(soup, faces, roofing, base);
   return soup.geometry();
 }
@@ -328,6 +329,23 @@ interface Run {
   s0: number;
   s1: number;
   y: number;
+}
+
+/**
+ * Whether a point of the plan is under a roof standing at about height `y`
+ * or higher. Below a tall roof's eave a lower wing's roof is still open air
+ * for the gutter; the other way round it is not.
+ */
+function coveredAt(model: RoofModel, p: Point, y: number): boolean {
+  const eaves = model.outlineEaves;
+  if (!eaves) return pointInRegions(p, model.outline);
+  return model.outline.some((region, i) => (eaves[i] ?? Infinity) > y - 1 && pointInRegion(p, region));
+}
+
+/** Under a roof lower than height `y`: a pipe from up there would run down through it. */
+function overLowerRoof(model: RoofModel, p: Point, y: number): boolean {
+  const eaves = model.outlineEaves;
+  return !!eaves && model.outline.some((region, i) => (eaves[i] ?? Infinity) <= y - 1 && pointInRegion(p, region));
 }
 
 /** The stretches of eave that are really the edge of the roof (the model's faces overlap; many of their lower edges are buried). */
@@ -358,7 +376,7 @@ function eaveRuns(model: RoofModel, faces: Face[]): Run[] {
     for (let s = lo; s <= hi + 1e-9; s += step) {
       const mid = Math.min(hi, s + step / 2);
       const p: Point = { x: base.x + tx * mid + nx * 0.06, y: base.z + tz * mid + nz * 0.06 };
-      const open = s < hi && !pointInRegions(p, model.outline);
+      const open = s < hi && !coveredAt(model, p, low);
       if (open && start === null) start = s;
       if (!open && start !== null) {
         list.push({ nx, nz, tx, tz, x: base.x, z: base.z, s0: start, s1: Math.min(hi, s), y: low });
@@ -523,6 +541,7 @@ export function buildGutters(model: RoofModel, color: string): THREE.BufferGeome
     const outlet: V3 = [r.x + r.tx * s + r.nx * out, r.y + GUTTER_TOP - GUTTER_R - 0.01, r.z + r.tz * s + r.nz * out];
     const wx = r.x + r.tx * s - r.nx * back;
     const wz = r.z + r.tz * s - r.nz * back;
+    if (overLowerRoof(model, { x: wx, y: wz }, r.y)) continue;
     const top = r.y - 0.3;
     tube(soup, outlet, [outlet[0], outlet[1] - 0.06, outlet[2]], pr * 0.8, base);
     tube(soup, [outlet[0], outlet[1] - 0.05, outlet[2]], [wx, top + 0.02, wz], pr, base);

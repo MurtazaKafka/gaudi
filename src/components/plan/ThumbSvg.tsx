@@ -3,6 +3,7 @@ import { FURNITURE, customId, isBuiltinKind, isCustomKind, type FurnitureDef, ty
 import { buildWallBody } from '../../export/walls';
 import { rectCorners } from '../../geometry';
 import { detectRooms } from '../../rooms';
+import { restOf, type RestMap } from '../../stacking';
 import { theme } from '../../theme';
 import type { PlanData } from '../../types';
 import { roomTone, type DrawingLook } from './look';
@@ -100,15 +101,21 @@ export function ThumbSvg({
         y2: n(g.center.y + (g.dir.y * g.width) / 2),
       }));
 
+    // Rugs under everything else, and whatever rests on a piece over it.
+    const rest: RestMap = showFurniture ? restOf(plan.furniture, (kind) => defOf(plan, kind)) : new Map();
+    const tier = (id: string, flat: boolean): number => {
+      const depth = rest.get(id)?.depth ?? 0;
+      return depth > 0 ? depth + 1 : flat ? 0 : 1;
+    };
     const items = showFurniture
       ? plan.furniture.flatMap((f) => {
           const def = defOf(plan, f.kind);
           if (!def || !Number.isFinite(f.x) || !Number.isFinite(f.y) || !Number.isFinite(f.rotation)) return [];
           const tone = color ? itemColor(def) : { fill: theme.surface, edge: theme.furnitureLine };
-          return [{ d: path([rectCorners(f.x, f.y, def.w, def.d, f.rotation)]), flat: def.h <= 0.06, ...tone }];
+          return [{ d: path([rectCorners(f.x, f.y, def.w, def.d, f.rotation)]), tier: tier(f.id, def.h <= 0.06), ...tone }];
         })
       : [];
-    items.sort((a, b) => Number(b.flat) - Number(a.flat)); // rugs under everything else
+    items.sort((a, b) => a.tier - b.tier);
 
     return { vb, thickness, rooms, walls: path(body.loops), windows, items, color };
   }, [plan, showFurniture, look]);

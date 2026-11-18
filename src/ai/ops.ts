@@ -11,6 +11,7 @@
 import { dist, distToSegment, pointInPolygon, quadsOverlap } from '../geometry';
 import { detectRooms, type DetectedRoom } from '../rooms';
 import type { FurnitureKind } from '../catalog';
+import { carryRiders, restOf } from '../stacking';
 import type { Furniture, Opening, PlanData, Point, Wall } from '../types';
 import {
   COMPASS,
@@ -183,7 +184,7 @@ const text = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 function copyPlan(plan: PlanData): PlanData {
   return {
     ...plan,
-    walls: plan.walls.map((w) => ({ id: w.id, a: { ...w.a }, b: { ...w.b } })),
+    walls: plan.walls.map((w) => ({ ...w, a: { ...w.a }, b: { ...w.b } })),
     openings: plan.openings.map((o) => ({ ...o })),
     furniture: plan.furniture.map((f) => ({ ...f })),
     roomNames: { ...plan.roomNames },
@@ -506,11 +507,14 @@ function moveWall(plan: PlanData, ctx: Ctx, wall: Wall, toward: Compass, distanc
 
   refitOpenings(plan, old);
 
-  // Furniture standing against the wall goes with it; furniture in its path is pushed ahead.
+  // Furniture standing against the wall goes with it; furniture in its path is pushed ahead. Whatever stands
+  // on a piece rides on it instead of being pushed on its own.
   const before = old.get(wall.id)!;
+  const stood = plan.furniture.map((f) => ({ ...f }));
+  const rest = restOf(stood, (k) => defFor(plan, k));
   plan.furniture = plan.furniture.map((f) => {
     const def = defFor(plan, f.kind);
-    if (!def) return f;
+    if (!def || rest.get(f.id)?.on) return f;
     const t = projectOnWall(before, f);
     if (t < -0.1 || t > len + 0.1) return f;
     const s = (f.x - before.a.x) * n.x + (f.y - before.a.y) * n.y;
@@ -522,6 +526,7 @@ function moveWall(plan: PlanData, ctx: Ctx, wall: Wall, toward: Compass, distanc
     ctx.touched.furniture.push(f.id);
     return { ...f, x: r3(f.x + n.x * by), y: r3(f.y + n.y * by) };
   });
+  plan.furniture = carryRiders(stood, plan.furniture, rest, roundPose);
 
   ctx.touched.walls.push(wall.id, ...jogs.map((j) => j.id));
 }
@@ -633,6 +638,16 @@ export interface PlaceRequest {
   clearDoors?: boolean;
 }
 
+const roundPose = (p: Pick<Furniture, 'x' | 'y' | 'rotation'>) => ({ x: r3(p.x), y: r3(p.y), rotation: p.rotation });
+
+/** Move a piece (by mutating it in `edit`) and carry whatever stands on it along. */
+function carryingRiders(plan: PlanData, edit: () => void): void {
+  const before = plan.furniture.map((f) => ({ ...f }));
+  const rest = restOf(before, (k) => defFor(plan, k));
+  edit();
+  plan.furniture = carryRiders(before, plan.furniture, rest, roundPose);
+}
+
 /**
  * Find a legal spot for a piece at or near where it was asked to go: inside
  * the room, not through a wall, clear of other furniture and of door swings.
@@ -647,8 +662,10 @@ export function placeFurniture(plan: PlanData, req: PlaceRequest): Point | null 
 
   const obstacles: Point[][] = [];
   if (!flat) {
+    // Whatever stands on another piece takes no floor of its own (and rides along if that piece moves).
+    const rest = restOf(plan.furniture, (k) => defFor(plan, k));
     for (const f of plan.furniture) {
-      if (f.id === req.ignoreId) continue;
+      if (f.id === req.ignoreId || rest.get(f.id)?.on) continue;
       const fd = defFor(plan, f.kind);
       if (!fd || isFlat(f.kind, fd)) continue;
       obstacles.push(footprint(fd, f));
@@ -836,8 +853,10 @@ function applyOne(plan: PlanData, ctx: Ctx, raw: Record<string, unknown>): void 
       const spot = placeFurniture(plan, { kind: f.kind, x, y, rotation: f.rotation, room: null, ignoreId: f.id, reach: 1.2 });
       if (!spot) return fail('no free spot there');
       if (Math.abs(spot.x - f.x) < 0.002 && Math.abs(spot.y - f.y) < 0.002) fail('it is already there');
-      f.x = spot.x;
-      f.y = spot.y;
+      carryingRiders(plan, () => {
+        f.x = spot.x;
+        f.y = spot.y;
+      });
       ctx.touched.furniture.push(f.id);
       return;
     }
@@ -848,9 +867,11 @@ function applyOne(plan: PlanData, ctx: Ctx, raw: Record<string, unknown>): void 
       if (Math.abs(rotation - degToRad((f.rotation * 180) / Math.PI)) < 0.002) fail('it already faces that way');
       const spot = placeFurniture(plan, { kind: f.kind, x: f.x, y: f.y, rotation, room: null, ignoreId: f.id, reach: 0.6 });
       if (!spot) return fail('it does not fit turned that way');
-      f.rotation = rotation;
-      f.x = spot.x;
-      f.y = spot.y;
+      carryingRiders(plan, () => {
+        f.rotation = rotation;
+        f.x = spot.x;
+        f.y = spot.y;
+      });
       ctx.touched.furniture.push(f.id);
       return;
     }

@@ -3,7 +3,9 @@
  * soups, in world space — x east, y up, z south (plan y).
  *
  * Every roof is built from the true footprint: the union of the rooms that
- * are under cover (see footprint.ts), never a bounding box.
+ * are under cover (see footprint.ts), never a bounding box. It sits on the
+ * walls round it: a building of several levels (levels.ts) has its roof up
+ * at the top of them, and rooms of different heights are roofed apart.
  *
  *  flat   one slab per building following the outline, with a thin raised
  *         fascia round every edge (courtyards stay open).
@@ -18,6 +20,7 @@
  * skirt rising to a flat deck: nothing is ever roofed that is not a room.
  */
 import type { PlanSettings, Point, RoofKind, Wall } from '../types';
+import { planLevels } from '../levels';
 import {
   gridAngle,
   growRegions,
@@ -30,6 +33,7 @@ import {
   rotateRegions,
   safeOffset,
   signedArea,
+  unionRegions,
 } from './footprint';
 import type { CellRect, Grid, Rect, Region } from './footprint';
 
@@ -48,6 +52,8 @@ export interface RoofSlab {
 export interface RoofSolid {
   part: RoofPart;
   positions: number[];
+  /** Height of the walls this solid stands on (m), where a plan has roofs at several heights; else the model's `eave`. */
+  eave?: number;
 }
 
 export type V3 = [number, number, number];
@@ -75,6 +81,11 @@ export interface RoofModel {
   ridges: RoofRidge[];
   /** Everything the roof covers, seen in plan (overhang included). */
   outline: Region[];
+  /**
+   * Where a plan has roofs at several heights: the wall height under each
+   * region of `outline`, in the same order. Absent when every roof stands at `eave`.
+   */
+  outlineEaves?: number[];
 }
 
 export interface RoofInput {
@@ -622,6 +633,12 @@ function wallsBox(walls: Wall[]): Region[] {
 /**
  * The roof for a plan. Returns an empty model for 'none', or when there is
  * nothing to put a roof on.
+ *
+ * Every roofed room is covered at the height of its own walls (levels.ts):
+ * the rooms of each height are roofed together, each height on its own, so
+ * separate buildings of 1, 2 and 4 levels each get their roof on top, and a
+ * low wing joined to a tall one has its own roof running in under the tall
+ * one's walls (which levels.ts carries up to close it in).
  */
 export function buildRoof(kind: RoofKind, input: RoofInput): RoofModel {
   const H = input.settings.wallHeight;
@@ -629,9 +646,58 @@ export function buildRoof(kind: RoofKind, input: RoofInput): RoofModel {
   const empty: RoofModel = { kind: 'none', slabs: [], solids: [], top: H, eave: H, slope: 0, ridges: [], outline: [] };
   if (kind === 'none' || !Number.isFinite(H) || !Number.isFinite(thickness)) return empty;
 
-  const base = input.rooms.length > 0 ? roofFootprint(input.rooms, input.open) : wallsBox(input.walls);
-  if (base.length === 0) return empty;
+  const indoor = input.rooms.filter((r) => !(r.key !== undefined && input.open?.has(r.key)));
+  const levels = planLevels(input.walls, indoor, thickness);
+  if (!levels.any) {
+    const base = input.rooms.length > 0 ? roofFootprint(input.rooms, input.open) : wallsBox(input.walls);
+    if (base.length === 0) return empty;
+    return finish(kind, roofParts(kind, base, H, thickness), H) ?? empty;
+  }
 
+  // One roof per height, lowest first.
+  const byHeight = new Map<number, Point[][]>();
+  indoor.forEach((r, i) => {
+    const level = levels.rooms[i] ?? 1;
+    byHeight.set(level, [...(byHeight.get(level) ?? []), r.polygon]);
+  });
+  const groups: { eave: number; base: Region[] }[] = [];
+  if (input.rooms.length === 0) groups.push({ eave: levels.max * H, base: wallsBox(input.walls) });
+  for (const level of [...byHeight.keys()].sort((a, b) => a - b)) {
+    groups.push({ eave: level * H, base: unionRegions(byHeight.get(level) ?? []) });
+  }
+  const parts: Built[] = [];
+  const outlineEaves: number[] = [];
+  for (const g of groups) {
+    if (g.base.length === 0) continue;
+    const part = roofParts(kind, g.base, g.eave, thickness);
+    // Tiles are coursed from their own eave, and gutters look for open air beside roofs at their own height.
+    parts.push({ ...part, solids: part.solids.map((s) => ({ ...s, eave: g.eave })) });
+    for (let i = 0; i < part.outline.length; i++) outlineEaves.push(g.eave);
+  }
+  if (parts.length === 0) return empty;
+  const lowest = groups.find((g) => g.base.length > 0)?.eave ?? H;
+  const all: Built = {
+    slabs: parts.flatMap((b) => b.slabs),
+    solids: parts.flatMap((b) => b.solids),
+    top: Math.max(...parts.map((b) => b.top)),
+    slope: Math.max(0, ...parts.map((b) => b.slope)),
+    ridges: parts.flatMap((b) => b.ridges),
+    outline: parts.flatMap((b) => b.outline),
+  };
+  const model = finish(kind, all, lowest);
+  return model ? { ...model, outlineEaves } : empty;
+}
+
+/** Drop anything degenerate; null when nothing is left to build. */
+function finish(kind: RoofKind, built: Built, eave: number): RoofModel | null {
+  const solids = built.solids.filter((s) => s.positions.length >= 9 && s.positions.every((v) => Number.isFinite(v)));
+  const slabs = built.slabs.filter((s) => s.poly.length >= 3 && s.y1 > s.y0);
+  if (solids.length === 0 && slabs.length === 0) return null;
+  return { kind, slabs, solids, top: built.top, eave, slope: built.slope, ridges: built.ridges, outline: built.outline };
+}
+
+/** The roofs over buildings that all stand `H` high, merged into one. */
+function roofParts(kind: Exclude<RoofKind, 'none'>, base: Region[], H: number, thickness: number): Built {
   // Buildings standing square to the same axes are roofed together; one with angled walls on its own.
   const square = new Map<number, Region[]>();
   const angled: Region[] = [];
@@ -654,10 +720,5 @@ export function buildRoof(kind: RoofKind, input: RoofInput): RoofModel {
     parts.push(turn(part, angle));
   }
   if (angled.length > 0) parts.push(freeRoof(kind, angled, H, thickness));
-  const built = mergeBuilt(parts, H);
-
-  const solids = built.solids.filter((s) => s.positions.length >= 9 && s.positions.every((v) => Number.isFinite(v)));
-  const slabs = built.slabs.filter((s) => s.poly.length >= 3 && s.y1 > s.y0);
-  if (solids.length === 0 && slabs.length === 0) return empty;
-  return { kind, slabs, solids, top: built.top, eave: H, slope: built.slope, ridges: built.ridges, outline: built.outline };
+  return mergeBuilt(parts, H);
 }

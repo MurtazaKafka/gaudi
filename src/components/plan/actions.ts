@@ -6,8 +6,11 @@ import { usePlanStore } from '../../store';
 import { useUiStore } from '../../uiStore';
 import { transact } from '../../history';
 import { dist, ptEq } from '../../geometry';
+import { furnitureDef, type FurnitureDef } from '../../catalog';
 import { detectRooms, type DetectedRoom } from '../../rooms';
-import type { Furniture, Point, Wall } from '../../types';
+import { fitsAt, handOf, nearestFit, sweepFit, worldFor, type Hand, type World } from '../../solidity';
+import { carryRiders, restOf, restsOnAny, ridersOf } from '../../stacking';
+import type { Furniture, Point, RestMode, Wall } from '../../types';
 import {
   junctionRefs,
   MIN_WALL,
@@ -147,24 +150,120 @@ export function setFurnitureLabel(id: string, text: string): void {
 /** Move the given furniture to `start + delta` (start positions frozen when the move began). */
 export function placeFurniture(start: Map<string, Point>, delta: Point): void {
   if (!canEdit()) return;
+  // One whole-millimetre move for all of them, so what rides on a piece keeps its exact place on it.
+  const dx = r3(delta.x);
+  const dy = r3(delta.y);
   usePlanStore.setState((s) => ({
     furniture: s.furniture.map((f) => {
       const from = start.get(f.id);
-      return from ? { ...f, x: r3(from.x + delta.x), y: r3(from.y + delta.y) } : f;
+      return from ? { ...f, x: r3(from.x + dx), y: r3(from.y + dy) } : f;
     }),
   }));
 }
 
-/** Turn the selected furniture in place. Quarter turns stay exact. */
-export function rotateSelection(delta: number): boolean {
+/** Plan positions keep millimetres; quarter turns stay exact. */
+const tidy = (p: { x: number; y: number; rotation: number }) => ({ x: r3(p.x), y: r3(p.y), rotation: normAngle(p.rotation) });
+
+/** What a move of `ids` takes along: the pieces themselves and everything resting on them. */
+export function movingWith(ids: readonly string[]): Map<string, Point> {
+  const { furniture } = usePlanStore.getState();
+  const riders = ridersOf(restOf(furniture, furnitureDef), ids);
+  const start = new Map<string, Point>();
+  for (const f of furniture) if (ids.includes(f.id) || riders.has(f.id)) start.set(f.id, { x: f.x, y: f.y });
+  return start;
+}
+
+/**
+ * The selected pieces that are moved by hand — one resting on another
+ * selected piece rides on it instead — as solidity.ts checks them.
+ */
+function handPieces(furniture: readonly Furniture[], ids: ReadonlySet<string>): { f: Furniture; def: FurnitureDef }[] {
+  const rest = restOf(furniture, furnitureDef);
+  return furniture
+    .filter((f) => ids.has(f.id) && !restsOnAny(rest, f.id, ids))
+    .map((f) => ({ f, def: furnitureDef(f.kind) }));
+}
+
+/** Pieces taken in hand: where each started, the world they must fit in, and the plan as it was. */
+export interface InHand {
+  start: Map<string, Point>;
+  world: World;
+  hand: Hand;
+  /** The furniture before the move, to put back exactly (the very same list) when the move comes to nothing. */
+  furniture: Furniture[];
+}
+
+/** Take `ids` in hand for a move: whatever rests on them comes along unchecked; they must fit among everything else. */
+export function takeInHand(ids: readonly string[]): InHand {
+  const plan = usePlanStore.getState();
+  const set = new Set(ids);
+  return {
+    start: movingWith(ids),
+    world: worldFor(plan, furnitureDef, set),
+    hand: handOf(handPieces(plan.furniture, set)),
+    furniture: plan.furniture,
+  };
+}
+
+/** How far a turned piece may be nudged to fit at its new angle, m. */
+const TURN_REACH = 0.3;
+
+/**
+ * Turn the selected furniture in place. Quarter turns stay exact. Whatever
+ * rests on a piece turns with it, about the piece's centre, like a tray. A
+ * piece that no longer fits at its new angle is nudged to the nearest spot
+ * where it does (a little way at most); if there is none it turns anyway —
+ * a turn is never refused. `free` skips the nudge.
+ */
+export function rotateSelection(delta: number, free = false): boolean {
   const ids = useUiStore.getState().selectedFurnitureIds;
   if (!canEdit() || !ids.length) return false;
-  usePlanStore.setState((s) => ({
-    furniture: s.furniture.map((f) =>
-      ids.includes(f.id) ? { ...f, rotation: normAngle(f.rotation + delta) } : f,
-    ),
-  }));
+  const plan = usePlanStore.getState();
+  const before = plan.furniture;
+  const rest = restOf(before, furnitureDef);
+  const selected = new Set(ids);
+  // A selected plate on a selected table goes round with the table, not on its own spot.
+  const roots = new Set(before.filter((f) => selected.has(f.id) && !restsOnAny(rest, f.id, selected)).map((f) => f.id));
+  let turned = before.map((f) => (roots.has(f.id) ? { ...f, rotation: normAngle(f.rotation + delta) } : f));
+  if (!free) {
+    const hand = handOf(turned.filter((f) => roots.has(f.id)).map((f) => ({ f, def: furnitureDef(f.kind) })));
+    const world = worldFor(plan, furnitureDef, selected);
+    if (!fitsAt(world, hand, 0, 0)) {
+      const spot = nearestFit(world, hand, 0, 0, { reach: TURN_REACH });
+      if (spot.fits) turned = turned.map((f) => (roots.has(f.id) ? { ...f, x: r3(f.x + spot.dx), y: r3(f.y + spot.dy) } : f));
+    }
+  }
+  usePlanStore.setState({ furniture: carryRiders(before, turned, rest, tidy) });
   return true;
+}
+
+/**
+ * Stand an item on what is beneath it, or on the floor. When that is what it
+ * would do anyway the choice is left to the guess, so the plan only records
+ * real exceptions.
+ */
+export function setFurnitureRest(id: string, onTop: boolean): void {
+  if (!canEdit()) return;
+  const plan = usePlanStore.getState();
+  const item = plan.furniture.find((f) => f.id === id);
+  if (!item) return;
+  const bare = (f: Furniture): Furniture => {
+    const next: Furniture = { ...f };
+    delete next.rest;
+    return next;
+  };
+  const guess = restOf(plan.furniture.map((f) => (f.id === id ? bare(f) : f)), furnitureDef).get(id);
+  const want: RestMode | undefined = onTop
+    ? guess?.on && guess.on === guess.beneath
+      ? undefined
+      : 'top'
+    : guess?.on
+      ? 'floor'
+      : undefined;
+  if (item.rest === want) return;
+  usePlanStore.setState((s) => ({
+    furniture: s.furniture.map((f) => (f.id !== id ? f : want ? { ...f, rest: want } : bare(f))),
+  }));
 }
 
 /** Copy the selected furniture one grid step down-right and select the copies. */
@@ -205,21 +304,21 @@ export function deleteSelection(): boolean {
 /**
  * Move the selection by `delta`: furniture and walls translate (attached
  * walls stretch); a door or window slides along its wall when the arrow
- * points along it.
+ * points along it. Furniture stops at whatever it meets on the way, unless
+ * `free` (⌥ held).
  */
-export function nudgeSelection(delta: Point): boolean {
+export function nudgeSelection(delta: Point, free = false): boolean {
   const ui = useUiStore.getState();
   if (!canEdit()) return false;
   const plan = usePlanStore.getState();
   let moved = false;
 
   if (ui.selectedFurnitureIds.length) {
-    const start = new Map<string, Point>();
-    for (const f of plan.furniture) {
-      if (ui.selectedFurnitureIds.includes(f.id)) start.set(f.id, { x: f.x, y: f.y });
-    }
-    if (start.size) {
-      placeFurniture(start, delta);
+    // Whatever stands on a moved piece goes with it.
+    const taken = takeInHand(ui.selectedFurnitureIds);
+    if (taken.start.size) {
+      const go = free ? { dx: delta.x, dy: delta.y } : sweepFit(taken.world, taken.hand, delta.x, delta.y);
+      if (Math.abs(go.dx) > 1e-9 || Math.abs(go.dy) > 1e-9) placeFurniture(taken.start, { x: go.dx, y: go.dy });
       moved = true;
     }
   }

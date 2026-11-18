@@ -12,6 +12,7 @@ import {
 } from './store';
 import { isBuiltinKind, isCustomKind, customId } from './catalog';
 import { sanitizeCustomItem } from './customItems';
+import { cleanLevels } from './levels';
 import { pauseHistory, resetHistory, resumeHistory } from './history';
 import { useUiStore } from './uiStore';
 import type {
@@ -74,7 +75,8 @@ function isPoint(p: unknown): p is Point {
 const ROOFS: readonly RoofKind[] = ['none', 'flat', 'gable', 'hip'];
 
 /** Hard ceilings on what a plan may contain — far above any real house, low enough that a hostile file can't hang the app. */
-export const PLAN_LIMITS = { walls: 2000, openings: 2000, furniture: 2000, rooms: 500, text: 80, coord: 2000 } as const;
+// Large enough for a campus of a hundred buildings in one plan; small enough that a hostile file cannot stall the page.
+export const PLAN_LIMITS = { walls: 8000, openings: 8000, furniture: 6000, rooms: 2500, text: 80, coord: 2000 } as const;
 
 type Raw = Record<string, unknown>;
 
@@ -95,10 +97,13 @@ export function normalizePlan(raw: unknown): { ok: true; plan: PlanData } | { ok
   for (const w of f.walls as Raw[]) {
     if (!isPoint(w?.a) || !isPoint(w?.b)) return { ok: false, error: 'Malformed wall.' };
     if (!inRange(w.a) || !inRange(w.b)) return { ok: false, error: 'This plan is too large to open.' };
+    const levels = cleanLevels(w.levels);
     walls.push({
       id: typeof w.id === 'string' ? w.id : crypto.randomUUID(),
       a: { x: w.a.x, y: w.a.y },
       b: { x: w.b.x, y: w.b.y },
+      // Only a real storey count survives; 1 is the default and is left out.
+      ...(levels !== undefined ? { levels } : {}),
     });
   }
 
@@ -144,6 +149,7 @@ export function normalizePlan(raw: unknown): { ok: true; plan: PlanData } | { ok
       y: fu.y as number,
       rotation: fu.rotation as number,
       ...(typeof fu.label === 'string' && short(fu.label) ? { label: short(fu.label) } : {}),
+      ...(fu.rest === 'floor' || fu.rest === 'top' ? { rest: fu.rest } : {}),
     });
   }
 

@@ -8,6 +8,8 @@ import { useAiStore } from '../aiStore';
 import { useKeyStore } from '../ai/client';
 import { customId, furnitureDef, isCustomKind } from '../catalog';
 import { dist, midpoint, nearestWallPoint, ptEq, type SnapResult } from '../geometry';
+import { cachedWorldFor, handOf, nearestFit } from '../solidity';
+import { restOf, stackOrder } from '../stacking';
 import { currentUnits, formatLength, parseLength, useUnits } from '../units';
 import { toastError } from '../toast';
 import { theme } from '../theme';
@@ -194,8 +196,10 @@ export function PlanCanvas() {
   // What the pointer is on, for the Color look's hover tones (the Paper look's walls keep their own).
   const [hoverWallId, setHoverWallId] = useState<string | null>(null);
   const [hoverRoomKey, setHoverRoomKey] = useState<string | null>(null);
-  /** Last pointer position in plan meters (unsnapped) and whether Shift was down. */
-  const pointer = useRef<{ raw: Point; shift: boolean } | null>(null);
+  /** Last pointer position in plan meters (unsnapped) and whether Shift / ⌥ were down. */
+  const pointer = useRef<{ raw: Point; shift: boolean; alt?: boolean } | null>(null);
+  /** Where the furniture being placed would go, and whether it fits there (it is solid: see solidity.ts). */
+  const [placeFits, placeFitsRef, setPlaceFits] = useRefState(true);
 
   const setSnap = (next: SnapResult | null) => {
     const cur = snapRef.current;
@@ -219,9 +223,10 @@ export function PlanCanvas() {
       setSnap(null);
       ui.setCursor(ptr.raw);
     } else if (active === 'furniture') {
-      const p = snapPointTo(ptr.raw, fineStep(plan.settings.units));
-      setSnap({ p, kind: 'grid' });
-      ui.setCursor(p);
+      const spot = placingSpot(ptr.raw, !!ptr.alt);
+      if (spot.fits !== placeFitsRef.current) setPlaceFits(spot.fits);
+      setSnap({ p: spot.p, kind: 'grid' });
+      ui.setCursor(spot.p);
     } else if (active === 'wall' || active === 'measure') {
       const result = resolveDraftPoint(ptr.raw, {
         walls: plan.walls,
@@ -237,6 +242,27 @@ export function PlanCanvas() {
       ui.setCursor(ptr.raw);
     }
   };
+
+  /**
+   * Where a click would put the piece being placed: the grid point under the
+   * pointer, or the nearest spot to it where the piece fits among the walls
+   * and furniture; `fits` false when nothing near does. ⌥ places it freely.
+   */
+  const placingSpot = (raw: Point, free: boolean): { p: Point; fits: boolean } => {
+    const plan = usePlanStore.getState();
+    const kind = useUiStore.getState().placingKind;
+    const p = snapPointTo(raw, fineStep(plan.settings.units));
+    if (!kind || free) return { p, fits: true };
+    const world = cachedWorldFor(plan, furnitureDef);
+    const hand = handOf([{ f: { id: '__placing', kind, x: p.x, y: p.y, rotation: placeRotationRef.current }, def: furnitureDef(kind) }]);
+    const last = lastPlaceFit.current;
+    const spot = nearestFit(world, hand, 0, 0, last ? { from: { dx: last.x - p.x, dy: last.y - p.y } } : {});
+    if (!spot.fits) return { p, fits: false };
+    const at = { x: p.x + spot.dx, y: p.y + spot.dy };
+    lastPlaceFit.current = at;
+    return { p: at, fits: true };
+  };
+  const lastPlaceFit = useRef<Point | null>(null);
 
   const endRun = () => {
     setAnchor(null);
@@ -269,14 +295,14 @@ export function PlanCanvas() {
     commitSegment(a, p);
   };
 
-  const pointerMove = (raw: Point, shift: boolean) => {
-    pointer.current = { raw, shift };
+  const pointerMove = (raw: Point, shift: boolean, alt = false) => {
+    pointer.current = { raw, shift, alt };
     refresh();
   };
 
   /** A left press with the current tool. `bare` = nothing was under the pointer. */
-  const pointerDown = (raw: Point, shift: boolean, bare: boolean) => {
-    pointer.current = { raw, shift };
+  const pointerDown = (raw: Point, shift: boolean, bare: boolean, alt = false) => {
+    pointer.current = { raw, shift, alt };
     const ui = useUiStore.getState();
     const plan = usePlanStore.getState();
     const active = usableTool(ui.tool, ui.readOnly);
@@ -343,8 +369,10 @@ export function PlanCanvas() {
 
     if (active === 'furniture') {
       if (ui.placingKind) {
-        const p = snapPointTo(raw, fineStep(plan.settings.units));
-        plan.addFurniture(ui.placingKind, p.x, p.y, placeRotationRef.current);
+        // Worked out again from the pointer, not from what was drawn: a piece only goes where it fits.
+        const spot = placingSpot(raw, alt);
+        if (spot.fits) plan.addFurniture(ui.placingKind, spot.p.x, spot.p.y, placeRotationRef.current);
+        refresh();
       }
       return;
     }
@@ -357,7 +385,7 @@ export function PlanCanvas() {
   const handleMouseMove = (e: KonvaEventObject<MouseEvent>) => {
     const pos = stageRef.current?.getPointerPosition();
     if (!pos) return;
-    pointerMove(toWorld(view, pos.x, pos.y), e.evt.shiftKey);
+    pointerMove(toWorld(view, pos.x, pos.y), e.evt.shiftKey, e.evt.altKey);
     // Re-derived on every move, so it can't stick when a shape goes away.
     setHoverCursor(tool === 'select' && !readOnly ? cursorOf(e.target) : null);
   };
@@ -366,7 +394,7 @@ export function PlanCanvas() {
     const stage = stageRef.current;
     const pos = stage?.getPointerPosition();
     if (!pos || e.evt.button !== 0) return;
-    pointerDown(toWorld(view, pos.x, pos.y), e.evt.shiftKey, e.target === stage);
+    pointerDown(toWorld(view, pos.x, pos.y), e.evt.shiftKey, e.target === stage, e.evt.altKey);
   };
 
   const handleMouseLeave = () => {
@@ -399,6 +427,14 @@ export function PlanCanvas() {
       }
       return;
     }
+    if (e.key === 'Alt') {
+      // ⌥: the piece being placed may overlap things, at once.
+      if (pointer.current && !pointer.current.alt) {
+        pointer.current.alt = true;
+        refresh();
+      }
+      return;
+    }
 
     const ro = ui.readOnly;
     const active = usableTool(ui.tool, ro);
@@ -412,7 +448,13 @@ export function PlanCanvas() {
       }
       return;
     }
-    if (e.altKey || e.code === 'Space') return;
+    if (e.code === 'Space') return;
+    // ⌥ with an arrow nudges furniture through whatever is in the way; ⌥ with anything else is not ours.
+    if (e.altKey) {
+      const step = arrowDelta(e.key, e.shiftKey ? fineStep(currentUnits()) : usePlanStore.getState().settings.gridSize);
+      if (step && active === 'select' && nudgeSelection(step, true)) e.preventDefault();
+      return;
+    }
 
     // While a wall is being drawn, numbers are a length.
     if (active === 'wall' && anchorRef.current) {
@@ -487,8 +529,10 @@ export function PlanCanvas() {
       case 'r': {
         if (ro) break;
         const delta = e.shiftKey ? -Math.PI / 2 : Math.PI / 2;
-        if (active === 'furniture') setPlaceRotation(normAngle(placeRotationRef.current + delta));
-        else rotateSelection(delta);
+        if (active === 'furniture') {
+          setPlaceRotation(normAngle(placeRotationRef.current + delta));
+          refresh(); // turned, it may fit somewhere else
+        } else rotateSelection(delta);
         break;
       }
       case 'Delete':
@@ -504,6 +548,10 @@ export function PlanCanvas() {
   const onKeyUp = useEffectEvent((e: KeyboardEvent) => {
     if (e.key === 'Shift' && pointer.current?.shift) {
       pointer.current.shift = false;
+      refresh();
+    }
+    if (e.key === 'Alt' && pointer.current?.alt) {
+      pointer.current.alt = false;
       refresh();
     }
   });
@@ -627,14 +675,20 @@ export function PlanCanvas() {
     }
     return spots;
   }, [openings, walls, rooms, roomOutlines, roomNames, units, thickness, entrance, view.scale]);
-  // Rugs and other flat things go down first, so furniture stands on them.
-  const drawOrder = useMemo(() => {
-    const flat = (f: Furniture): number => {
-      const h = isCustomKind(f.kind) ? customItems[customId(f.kind)]?.h : furnitureDef(f.kind).h;
-      return h !== undefined && h <= 0.06 ? 0 : 1;
-    };
-    return furniture.some((f) => flat(f) === 0) ? [...furniture].sort((a, b) => flat(a) - flat(b)) : furniture;
+  // What stands on what (stacking.ts), worked out from positions on every edit.
+  const rest = useMemo(() => {
+    void customItems; // furnitureDef reads a mirror of these
+    return restOf(furniture, furnitureDef);
   }, [furniture, customItems]);
+  // Rugs and other flat things go down first, so furniture stands on them; whatever rests on a piece is
+  // drawn over it, so a click finds the plate before the table it is on.
+  const drawOrder = useMemo(() => {
+    const flat = (f: Furniture): boolean => {
+      const h = isCustomKind(f.kind) ? customItems[customId(f.kind)]?.h : furnitureDef(f.kind).h;
+      return h !== undefined && h <= 0.06;
+    };
+    return stackOrder(furniture, rest, flat);
+  }, [furniture, customItems, rest]);
 
   // The segment being drawn, and the length the status bar shows for it.
   const target = tool === 'wall' && anchor ? draftEnd(anchor, snap?.p ?? null, typed, lastDir) : null;
@@ -860,6 +914,7 @@ export function PlanCanvas() {
               selected={false}
               interactive={false}
               ghost
+              invalid={!placeFits}
             />
           )}
 
@@ -968,7 +1023,13 @@ export function PlanCanvas() {
       )}
 
       {selectedItem && (
-        <FurnitureInspector key={selectedItem.id} item={selectedItem} view={view} size={size} />
+        <FurnitureInspector
+          key={selectedItem.id}
+          item={selectedItem}
+          view={view}
+          size={size}
+          rest={rest.get(selectedItem.id)}
+        />
       )}
 
       {panelRoom && (

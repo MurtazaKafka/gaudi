@@ -138,15 +138,32 @@ export function resumeHistory(): void {
   lastWasTweak = false;
 }
 
+/** What redo held when the outermost gesture began, in case the gesture comes to nothing. */
+let futureAtGesture: PlanData[] = [];
+
 /** Start a drag-like gesture: everything until `endGesture` is one undo step. */
 export function beginGesture(): void {
-  if (gesture === 0) gestureRecorded = false;
+  if (gesture === 0) {
+    gestureRecorded = false;
+    futureAtGesture = future;
+  }
   gesture++;
 }
 
+/**
+ * End a gesture. One that put everything back exactly as it found it (a drag
+ * dropped where nothing fits, so the piece went home) leaves no step behind.
+ */
 export function endGesture(): void {
   gesture = Math.max(0, gesture - 1);
   if (gesture === 0) {
+    if (gestureRecorded && past.length > 0 && same(past[past.length - 1], pickPlan(usePlanStore.getState()))) {
+      past.pop();
+      future = futureAtGesture;
+      publish();
+    }
+    gestureRecorded = false;
+    futureAtGesture = [];
     lastAt = 0;
     lastWasTweak = false;
   }

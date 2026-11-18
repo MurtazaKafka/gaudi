@@ -13,8 +13,10 @@ import {
   resizeWall,
   rotateSelection,
   setFurnitureLabel,
+  setFurnitureRest,
   setOpeningWidth,
 } from './actions';
+import type { Rest } from '../../stacking';
 import { footprintRadius, MIN_WALL, wallNormal } from './drafting';
 import { fitRoomLabel, labelAnchor } from './labels';
 import { roomText } from './roomText';
@@ -233,21 +235,35 @@ export function OpeningInspector({
   );
 }
 
-/** Note, rotate, duplicate, delete for the one selected furniture item. */
+/** The name of a placed item, as a sentence would use it ("the dining table"). */
+function itemName(id: string | null): string {
+  const f = id ? usePlanStore.getState().furniture.find((x) => x.id === id) : undefined;
+  return f ? `the ${furnitureDef(f.kind).label.toLowerCase()}` : 'what is under it';
+}
+
+/**
+ * Note, rotate, duplicate, delete for the one selected furniture item — and,
+ * when something beneath it could carry it, whether it stands on that or on
+ * the floor.
+ */
 export function FurnitureInspector({
   item,
   view,
   size,
+  rest,
 }: {
   item: Furniture;
   view: View;
   size: Size;
+  /** Where it stands (stacking.ts). */
+  rest?: Rest;
 }) {
   // Subscribe to the definition so a re-modelled custom item re-labels itself.
   const custom = usePlanStore((s) =>
     isCustomKind(item.kind) ? s.customItems[customId(item.kind)] : undefined,
   );
   const def = custom ?? furnitureDef(item.kind);
+  const onTop = !!rest?.on;
   const c = toScreen(view, item);
   const reach = footprintRadius(def.w, def.d) * view.scale + 12;
   // Above the item; below it when there is no room above.
@@ -268,6 +284,21 @@ export function FurnitureInspector({
         value={item.label ?? ''}
         onCommit={(text) => setFurnitureLabel(item.id, text)}
       />
+      {rest?.beneath && (
+        <button
+          type="button"
+          className={`btn small quiet plan-inspector-rest ${onTop ? 'active' : ''}`}
+          title={
+            onTop
+              ? `Standing on ${itemName(rest.on)}. Click to put it on the floor.`
+              : `On the floor. Click to stand it on ${itemName(rest.beneath)}.`
+          }
+          aria-pressed={onTop}
+          onClick={() => setFurnitureRest(item.id, !onTop)}
+        >
+          {onTop ? 'On top' : 'On the floor'}
+        </button>
+      )}
       <span className="float-rule" />
       <IconButton title="Rotate (R)" onClick={() => rotateSelection(Math.PI / 2)}>
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">

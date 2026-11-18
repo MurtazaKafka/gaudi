@@ -747,7 +747,7 @@ export function deleteItem(id: string): void {
         if (Object.hasOwn(plan.customItems, id)) return;
         transact(() => {
           plan.putCustomItem(item);
-          if (placed.length) plan.addFurnitureBatch(placed.map((f) => ({ kind: f.kind, x: f.x, y: f.y, rotation: f.rotation, ...(f.label ? { label: f.label } : {}) })));
+          if (placed.length) plan.addFurnitureBatch(placed.map((f) => ({ kind: f.kind, x: f.x, y: f.y, rotation: f.rotation, ...(f.label ? { label: f.label } : {}), ...(f.rest ? { rest: f.rest } : {}) })));
         });
       },
     },

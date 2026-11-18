@@ -17,6 +17,7 @@ import { furnitureDef, isBuiltinKind } from '../catalog';
 import { DOUBLE_DOOR_MIN } from '../openingSizes';
 import { pointInPolygon } from '../geometry';
 import type { DetectedRoom } from '../rooms';
+import { liftOf, restOf, type RestMap } from '../stacking';
 import { roomKindFromName } from '../roomTypes';
 import type { RoomKind } from '../roomTypes';
 import type { Furniture, PlanSettings, Point } from '../types';
@@ -155,6 +156,12 @@ interface Item {
   box: Box2;
   room: Room | null;
   seed: number;
+  /** How high it stands: 0 on the floor, the table top for something on a table (stacking.ts). */
+  lift: number;
+  /** It stands on something else, so it takes up no floor of its own. */
+  raised: boolean;
+  /** The user has put something on it: its surfaces are theirs, not ours to dress. */
+  loaded: boolean;
 }
 
 interface Room {
@@ -173,8 +180,8 @@ const FLOOR = 0.01;
 /** Furniture a rug may run under. */
 const UNDER_RUG = new Set(['sofa', 'armchair', 'coffee_table', 'chair', 'bed_double', 'bed_single', 'nightstand']);
 
-/** How tall a thing reads when deciding whether a picture can hang above it. */
-const blockHeight = (kind: string, h: number): number => (kind === 'tv_stand' ? 1.4 : h + 0.1);
+/** How high a thing reaches when deciding whether a picture can hang above it (a lamp on a sideboard reaches higher). */
+const blockHeight = (it: Pick<Item, 'kind' | 'h' | 'lift'>): number => it.lift + (it.kind === 'tv_stand' ? 1.4 : it.h + 0.1);
 
 function kindSeed(kind: string): number {
   let h = 7;
@@ -262,7 +269,8 @@ class Dresser {
   private collectOpenings(): void {
     const outer = new Map<string, 1 | -1 | 0>();
     for (const p of this.input.pieces) {
-      if (outer.get(p.wallId)) continue;
+      // Read from the ground, as house.ts does: higher up a wall may face out over a lower wing's roof.
+      if (p.stacked || outer.get(p.wallId)) continue;
       outer.set(p.wallId, p.pOuter && !p.mOuter ? -1 : p.mOuter && !p.pOuter ? 1 : 0);
     }
     for (const o of this.input.openings) {
@@ -314,6 +322,14 @@ class Dresser {
   }
 
   private collectItems(): void {
+    let rest: RestMap = new Map();
+    try {
+      rest = restOf(this.input.furniture, furnitureDef);
+    } catch {
+      // Everything on the floor, as before stacking.
+    }
+    const loaded = new Set<string>();
+    for (const r of rest.values()) if (r.on) loaded.add(r.on);
     for (const f of this.input.furniture) {
       if (![f.x, f.y, f.rotation].every(Number.isFinite)) continue;
       let def;
@@ -333,6 +349,9 @@ class Dresser {
         box: { x: f.x, y: f.y, hx: def.w / 2, hy: def.d / 2, a: f.rotation },
         room,
         seed: D.rand(f.x, f.y, f.rotation, kindSeed(f.kind)),
+        lift: liftOf(rest, f.id),
+        raised: !!rest.get(f.id)?.on,
+        loaded: loaded.has(f.id),
       };
       this.items.push(item);
       room?.items.push(item);
@@ -359,7 +378,8 @@ class Dresser {
     }
     for (const v of room.poly) if (insideBox(v, grow(box, this.half))) return false;
     for (const it of this.items) {
-      if (opts.under?.has(it.kind)) continue;
+      // Whatever stands on another piece takes no floor: the piece under it already keeps us clear.
+      if (it.raised || opts.under?.has(it.kind)) continue;
       if (overlaps(box, grow(it.box, 0.03))) return false;
     }
     // Door leaves clear the floor by a few millimetres: a rug may lie under one, nothing else.
@@ -389,7 +409,7 @@ class Dresser {
     for (const [p, q] of f.blocked) if (a < q && b > p) return false;
     const c = this.at(f, s, depth / 2);
     const strip: Box2 = { x: c.x, y: c.y, hx: w / 2, hy: depth / 2, a: Math.atan2(f.dy, f.dx) };
-    for (const it of this.items) if (blockHeight(it.kind, it.h) > y0 && overlaps(strip, it.box)) return false;
+    for (const it of this.items) if (blockHeight(it) > y0 && overlaps(strip, it.box)) return false;
     for (const fl of this.floor) if (fl.h > y0 && overlaps(strip, fl.box)) return false;
     return true;
   }
@@ -409,7 +429,7 @@ class Dresser {
       const mid = this.at(f, (f.lo + f.hi) / 2, 0.25);
       const strip: Box2 = { x: mid.x, y: mid.y, hx: (f.hi - f.lo) / 2 + 1, hy: 0.25, a: ang };
       const tall = [
-        ...this.items.filter((it) => blockHeight(it.kind, it.h) > y0).map((it) => it.box),
+        ...this.items.filter((it) => blockHeight(it) > y0).map((it) => it.box),
         ...this.floor.filter((fl) => fl.h > y0).map((fl) => fl.box),
       ];
       for (const box of tall) {
@@ -455,9 +475,9 @@ class Dresser {
     return null;
   }
 
-  /** A pen in an item's own frame, lifted to `y`. */
+  /** A pen in an item's own frame, `y` up from its base (which is the table top, for a piece standing on a table). */
   itemPen(it: Item, x: number, y: number, z: number, turn = 0): Pen {
-    return Pen.at(this.bag, it.f.x, it.f.y, it.f.rotation).to(x, y, z, [0, turn, 0]);
+    return Pen.at(this.bag, it.f.x, it.f.y, it.f.rotation).to(x, it.lift + y, z, [0, turn, 0]);
   }
 
   /** A point in an item's frame, on the plan. */
@@ -581,6 +601,9 @@ class Dresser {
   // ---------- dressing furniture ----------
 
   dressItem(it: Item): void {
+    // A surface the user has put something on is theirs: no vase or cushion of ours among their things.
+    // (A bookcase's shelves and the mirror over a basin are not that surface.)
+    if (it.loaded && it.kind !== 'bookshelf' && it.kind !== 'bathroom_sink') return;
     const { t } = this;
     const pick = it.seed;
     // Soft furnishings: the style's accents, softened toward linen.
@@ -657,7 +680,7 @@ class Dresser {
         break;
       }
       case 'wardrobe':
-        if (D.rand(pick, 1) < 0.45 && this.wallH - it.h > 0.45) {
+        if (D.rand(pick, 1) < 0.45 && this.wallH - it.lift - it.h > 0.45) {
           D.basket(this.itemPen(it, (D.rand(pick, 2) - 0.5) * (it.w - 0.45), it.h, -0.02), t, 0.38, 0.3, 0.22, pick);
         }
         break;
@@ -697,7 +720,7 @@ class Dresser {
 
   /** Jars, a board, a basket: a couple of things on the counters of a room. */
   dressCounters(room: Room): void {
-    const counters = room.items.filter((it) => it.kind === 'counter').sort((a, b) => a.seed - b.seed);
+    const counters = room.items.filter((it) => it.kind === 'counter' && !it.loaded).sort((a, b) => a.seed - b.seed);
     if (counters.length === 0) return;
     if (room.kind === 'utility') {
       const c = counters[0];

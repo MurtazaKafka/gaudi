@@ -7,6 +7,7 @@
 import { FURNITURE, customId, isBuiltinKind, isCustomKind, type FurnitureDef, type FurnitureKind } from '../catalog';
 import { pointInPolygon } from '../geometry';
 import { detectRooms } from '../rooms';
+import { liftOf, restOf } from '../stacking';
 import type { PlanData, PlanSettings, Point, ProductSource, Units } from '../types';
 import { buildWallBody, loopArea, type WallBody, type WallGap } from './walls';
 
@@ -45,6 +46,8 @@ export interface FurnitureInfo {
   x: number;
   y: number;
   rotation: number;
+  /** How high its base stands: 0 on the floor, the table top for something on a table (stacking.ts). */
+  z: number;
   w: number;
   d: number;
   h: number;
@@ -353,6 +356,7 @@ export function buildModel(plan: PlanData): PlanModel {
 
   const furniture: FurnitureInfo[] = [];
   const placed = new Map<string, number>();
+  const rest = restOf(plan.furniture, (kind) => defOf(plan, kind));
   for (const f of plan.furniture) {
     if (!Number.isFinite(f.x) || !Number.isFinite(f.y) || !Number.isFinite(f.rotation)) continue;
     const def = defOf(plan, f.kind);
@@ -366,6 +370,7 @@ export function buildModel(plan: PlanData): PlanModel {
       x: f.x,
       y: f.y,
       rotation: f.rotation,
+      z: liftOf(rest, f.id),
       w: def.w,
       d: def.d,
       h: def.h,

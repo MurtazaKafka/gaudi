@@ -9,11 +9,12 @@
  */
 import * as THREE from 'three';
 import type { WallModel, WallPiece, PlacedOpening } from '../build';
-import { buildWallModel } from '../build';
+import { buildWallModel, openingRows } from '../build';
 import { DOUBLE_DOOR_MIN, TRIPLE_WINDOW_MIN } from '../openingSizes';
 import { detectRooms } from '../rooms';
 import type { DetectedRoom } from '../rooms';
 import { furnitureDef, isBuiltinKind } from '../catalog';
+import { liftOf, restOf } from '../stacking';
 import type { Furniture, PlanData, PlanSettings, Point, RoofKind, Wall } from '../types';
 import { openAirRooms } from './footprint';
 import { buildItemGroup } from './partGeometry';
@@ -287,7 +288,11 @@ function pieceGeometry(piece: WallPiece): THREE.BufferGeometry {
       nz = -nz;
     }
     const side = piece.sides[i];
-    const g = (side === 'p' && piece.pOuter) || (side === 'm' && piece.mOuter) ? 1 : 0;
+    // An end standing in the open above a shorter wall is clad like the faces beside it.
+    const g =
+      (side === 'p' && piece.pOuter) || (side === 'm' && piece.mOuter) || (side === 'end' && (piece.pOuter || piece.mOuter))
+        ? 1
+        : 0;
     tri(g, [a.x, y0, a.y], [b.x, y0, b.y], [b.x, y1, b.y], nx, 0, nz);
     tri(g, [a.x, y0, a.y], [b.x, y1, b.y], [a.x, y1, a.y], nx, 0, nz);
   }
@@ -326,9 +331,12 @@ function sidingFrom(piece: WallPiece, openings: PlacedOpening[]): number | undef
     cz += p.y / piece.poly.length;
   }
   for (const o of openings) {
-    if (o.wallId !== piece.wallId || Math.abs(o.y1 - piece.y0) > 0.02) continue;
+    if (o.wallId !== piece.wallId) continue;
+    // A window repeated up a tall wall has a head on every level.
+    const head = openingRows(o).find((dy) => Math.abs(o.y1 + dy - piece.y0) <= 0.02);
+    if (head === undefined) continue;
     const along = (cx - o.x) * Math.cos(o.angle) + (cz - o.y) * Math.sin(o.angle);
-    if (Math.abs(along) <= o.width / 2 + 0.02) return o.y1 + casingHead(o.type) + DRIP_CAP;
+    if (Math.abs(along) <= o.width / 2 + 0.02) return o.y1 + head + casingHead(o.type) + DRIP_CAP;
   }
   return undefined;
 }
@@ -595,10 +603,11 @@ function buildWindow(o: PlacedOpening, kit: MaterialKit, inside: 1 | -1 | 0 = 0)
  * window, the same every time. From outside this is what makes glass read as
  * a window into a lived-in room rather than a grey panel.
  */
-function dressWindow(g: THREE.Group, o: PlacedOpening, kit: MaterialKit, inside: 1 | -1): void {
+function dressWindow(g: THREE.Group, o: PlacedOpening, kit: MaterialKit, inside: 1 | -1, level = 0): void {
   const pal = furniturePalette(kit.style);
   // Chosen by where the window is, not by its id: the same plan dresses the same way every time it is opened.
-  const id = (Math.round(o.x * 20) * 73856093) ^ (Math.round(o.y * 20) * 19349663);
+  // Each level of a tall facade chooses again, so the rows do not all hang the same curtain.
+  const id = ((Math.round(o.x * 20) * 73856093) ^ (Math.round(o.y * 20) * 19349663)) + level * 83492791;
   const pick = hash(id, 1, 2);
   const w = o.width;
   const h = o.y1 - o.y0;
@@ -679,13 +688,136 @@ function dressWindow(g: THREE.Group, o: PlacedOpening, kit: MaterialKit, inside:
 }
 
 /**
+ * Geometries, each repeated at the heights in its `offsets` (m), as one
+ * geometry: the upper rows of a window. Written straight into one set of
+ * arrays (no copy per row). Null when the parts do not share one layout.
+ */
+function raisedMerge(parts: { geo: THREE.BufferGeometry; offsets: number[] }[]): THREE.BufferGeometry | null {
+  const list = parts.filter((p) => p.offsets.length > 0 && p.geo.getAttribute('position'));
+  if (list.length === 0) return null;
+  const first = list[0].geo;
+  const names = Object.keys(first.attributes);
+  const indexed = first.index !== null;
+  let vertices = 0;
+  let indices = 0;
+  for (const { geo, offsets } of list) {
+    const keys = Object.keys(geo.attributes);
+    if ((geo.index !== null) !== indexed || keys.length !== names.length) return null;
+    for (const name of names) {
+      if (geo.getAttribute(name)?.itemSize !== first.getAttribute(name).itemSize) return null;
+    }
+    vertices += geo.getAttribute('position').count * offsets.length;
+    if (geo.index) indices += geo.index.count * offsets.length;
+  }
+  const out = new THREE.BufferGeometry();
+  for (const name of names) {
+    const size = first.getAttribute(name).itemSize;
+    const array = new Float32Array(vertices * size);
+    let at = 0;
+    for (const { geo, offsets } of list) {
+      const src = geo.getAttribute(name);
+      const flat = src instanceof THREE.BufferAttribute ? src.array : null;
+      const n = src.count * size;
+      for (const dy of offsets) {
+        if (flat && flat.length >= n) array.set(flat.subarray(0, n), at);
+        else for (let i = 0; i < src.count; i++) for (let c = 0; c < size; c++) array[at + i * size + c] = src.getComponent(i, c);
+        if (name === 'position' && dy !== 0) for (let i = 1; i < n; i += 3) array[at + i] += dy;
+        at += n;
+      }
+    }
+    out.setAttribute(name, new THREE.BufferAttribute(array, size));
+  }
+  if (indexed) {
+    const index = new Uint32Array(indices);
+    let at = 0;
+    let base = 0;
+    for (const { geo, offsets } of list) {
+      const src = geo.index!;
+      const count = geo.getAttribute('position').count;
+      for (let k = 0; k < offsets.length; k++) {
+        for (let i = 0; i < src.count; i++) index[at++] = src.getX(i) + base;
+        base += count;
+      }
+    }
+    out.setIndex(new THREE.BufferAttribute(index, 1));
+  }
+  return out;
+}
+
+/** Copies of `geo` raised by each of `offsets` (m), as one geometry. */
+function raisedCopies(geo: THREE.BufferGeometry, offsets: number[]): THREE.BufferGeometry | null {
+  return raisedMerge([{ geo, offsets }]);
+}
+
+/**
+ * A window on a wall of several levels, again on every level above the
+ * ground: the same frame, glass, casing and sill, with its own curtain or
+ * blind on each level. Merged into one mesh per finish and added to the
+ * ground window's group, so a tall facade costs a few draw calls per window
+ * rather than a few per pane, and the rows rise and settle with the window.
+ */
+function addUpperRows(g: THREE.Group, o: PlacedOpening, kit: MaterialKit, inside: 1 | -1 | 0): void {
+  const rows = openingRows(o);
+  if (rows.length < 2) return;
+  interface Lot {
+    material: THREE.Material;
+    cast: boolean;
+    receive: boolean;
+    order: number;
+    parts: { geo: THREE.BufferGeometry; offsets: number[] }[];
+  }
+  const lots = new Map<string, Lot>();
+  const put = (mesh: THREE.Mesh, geo: THREE.BufferGeometry, offsets: number[]): void => {
+    const material = mesh.material as THREE.Material;
+    const key = `${material.uuid}|${mesh.castShadow}|${mesh.receiveShadow}|${mesh.renderOrder}`;
+    let lot = lots.get(key);
+    if (!lot) {
+      lot = { material, cast: mesh.castShadow, receive: mesh.receiveShadow, order: mesh.renderOrder, parts: [] };
+      lots.set(key, lot);
+    }
+    lot.parts.push({ geo, offsets });
+  };
+  // The first level up is built as the ground one is; the levels above it are that, raised.
+  const up = buildWindow({ ...o, y0: o.y0 + rows[1], y1: o.y1 + rows[1] }, kit, 0);
+  up.updateMatrixWorld(true);
+  const raise = rows.slice(1).map((dy) => dy - rows[1]);
+  for (const child of up.children) {
+    const mesh = child as THREE.Mesh;
+    if (mesh.isMesh) put(mesh, mesh.geometry.clone().applyMatrix4(mesh.matrix), raise);
+  }
+  disposeGroup(up);
+  if (kit.style.id !== 'maquette' && inside !== 0) {
+    for (let k = 1; k < rows.length; k++) {
+      const level = new THREE.Group();
+      dressWindow(level, { ...o, y0: o.y0 + rows[k], y1: o.y1 + rows[k] }, kit, inside, k);
+      for (const child of level.children) {
+        const mesh = child as THREE.Mesh;
+        if (mesh.isMesh) put(mesh, mesh.geometry, [0]);
+      }
+    }
+  }
+  for (const lot of lots.values()) {
+    const geo = raisedMerge(lot.parts);
+    for (const p of lot.parts) p.geo.dispose();
+    if (!geo) continue;
+    const mesh = new THREE.Mesh(geo, lot.material);
+    mesh.castShadow = lot.cast;
+    mesh.receiveShadow = lot.receive;
+    mesh.renderOrder = lot.order;
+    mesh.name = 'window-rows';
+    g.add(mesh);
+  }
+}
+
+/**
  * Which side of each wall is indoors, in an opening's own frame: its +z is
  * the wall's "p" side. +1 / −1 = that side is the room; 0 = indoors both sides.
  */
 export function insideSides(pieces: WallPiece[]): Map<string, 1 | -1 | 0> {
   const out = new Map<string, 1 | -1 | 0>();
   for (const p of pieces) {
-    if (out.get(p.wallId)) continue;
+    // Read from the ground: higher up, a wall between two rooms can face out over a lower wing's roof.
+    if (p.stacked || out.get(p.wallId)) continue;
     out.set(p.wallId, p.pOuter && !p.mOuter ? -1 : p.mOuter && !p.pOuter ? 1 : 0);
   }
   return out;
@@ -701,6 +833,7 @@ export function buildOpenings(openings: PlacedOpening[], kit: MaterialKit, piece
     if (!finite(o.x, o.y, o.angle, o.width, o.y0, o.y1) || o.width < 0.05 || o.y1 - o.y0 < 0.05) continue;
     const side = inside.get(o.wallId) ?? 0;
     const g = o.type === 'door' ? buildDoor(o, kit, side !== 0) : buildWindow(o, kit, side);
+    if (o.type === 'window') addUpperRows(g, o, kit, side);
     g.position.set(o.x, 0, o.y);
     g.rotation.y = -o.angle;
     g.userData.key = `opening-${o.id}`;
@@ -842,9 +975,15 @@ export function buildRoofGroup(model: RoofModel, kit: MaterialKit, castShadow = 
 
 // ---------- furniture ----------
 
+/**
+ * Every placed item, each standing on whatever is beneath it (stacking.ts): a
+ * plate on the table top, a speaker on the stage. `userData.restY` is that
+ * height, so the arrival animations (rise.ts) settle it there and not on the floor.
+ */
 export function buildFurniture(furniture: Furniture[], kit: MaterialKit): THREE.Group {
   const group = new THREE.Group();
   group.name = 'furniture';
+  const rest = restOf(furniture, furnitureDef);
   for (const item of furniture) {
     try {
       if (!finite(item.x, item.y, item.rotation)) continue;
@@ -856,9 +995,11 @@ export function buildFurniture(furniture: Furniture[], kit: MaterialKit): THREE.
       const g =
         (isBuiltinKind(item.kind) && buildModelItem(item.kind, def, furniturePalette(kit.style), kit.furniture)) ||
         buildItemGroup(def, kit.furniture, tint, true);
-      g.position.set(item.x, 0, item.y);
+      const lift = liftOf(rest, item.id);
+      g.position.set(item.x, lift, item.y);
       g.rotation.y = -item.rotation;
       g.userData.key = `item-${item.id}`;
+      g.userData.restY = lift;
       g.name = nodeName('', item.label ? `${def.label} ${item.label}` : def.label, 'item');
       group.add(g);
     } catch {
@@ -1079,24 +1220,40 @@ function spillMesh(geo: THREE.BufferGeometry, name: string, kit: LampKit): THREE
   return mesh;
 }
 
-/** The room's light falling out of a window: a warm wash on the sill, and a soft pool on the ground under it. */
-function windowSpill(o: PlacedOpening, side: 1 | -1, group: THREE.Group, kit: LampKit): void {
+/** A copy of a glow or wash mesh on new geometry: same light, same draw order, never picked. */
+function glowLike(src: THREE.Mesh, geo: THREE.BufferGeometry): THREE.Mesh {
+  const mesh = new THREE.Mesh(geo, src.material);
+  mesh.name = src.name;
+  mesh.renderOrder = src.renderOrder;
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+  mesh.raycast = () => {};
+  return mesh;
+}
+
+/**
+ * The room's light falling out of a window: a warm wash on the sill, and a
+ * soft pool on the ground under it. `above`: how far up the window's other
+ * rows stand (a tall wall); each sill gets its wash, the ground one pool.
+ */
+function windowSpill(o: PlacedOpening, side: 1 | -1, group: THREE.Group, kit: LampKit, above: number[] = []): void {
   const f = openingFrame(o);
   const out = -side;
   const outward = scaled(f.through, out);
   const w = o.width;
   const add = (geo: THREE.BufferGeometry, name: string) => group.add(spillMesh(geo, name, kit));
-  if (o.y0 > 0.05) {
+  if (o.y0 > 0.05 || above.length > 0) {
     // The sill's top, outside the frame (see buildWindow: its top is 32 mm over the opening's foot).
     const a = o.thickness / 2 + 0.015;
     const b = o.thickness / 2 + 0.09;
-    add(
-      paintedGrid(f.at(0, o.y0 + 0.034, 0), f.along, outward, [-w / 2 - 0.08, w / 2 + 0.08, a, b], [4, 1], UP, (u, v) => {
-        const k = 0.5 * (1 - smooth(w / 2 - 0.1, w / 2 + 0.08, Math.abs(u))) * (1 - 0.6 * smooth(a, b, v));
-        return [k, k, k, 1];
-      }),
-      'window-spill',
-    );
+    const sill = paintedGrid(f.at(0, o.y0 + 0.034, 0), f.along, outward, [-w / 2 - 0.08, w / 2 + 0.08, a, b], [4, 1], UP, (u, v) => {
+      const k = 0.5 * (1 - smooth(w / 2 - 0.1, w / 2 + 0.08, Math.abs(u))) * (1 - 0.6 * smooth(a, b, v));
+      return [k, k, k, 1];
+    });
+    const rows = raisedCopies(sill, above);
+    if (rows) add(rows, 'window-spill');
+    if (o.y0 > 0.05) add(sill, 'window-spill');
+    else sill.dispose();
   }
   // A pool on the ground, starting at the wall and spreading as it goes; higher windows throw it further out.
   const near = o.thickness / 2 + 0.06;
@@ -1212,11 +1369,17 @@ export function buildRoomLamps(
     };
     const room = rooms.find((r) => pointInPolygon(probe, r.polygon));
     if (room && open?.has(room.key)) continue;
+    // A window repeated up a tall wall glows on every level: the same light, a level higher each time.
+    const above = openingRows(o).slice(1);
     if (panes) {
       const pane = windowPane(o, side, room, height, kit);
-      if (pane) group.add(pane);
+      if (pane) {
+        group.add(pane);
+        const rows = raisedCopies(pane.geometry, above);
+        if (rows) group.add(glowLike(pane, rows));
+      }
     }
-    windowSpill(o, side, group, kit);
+    windowSpill(o, side, group, kit, above);
   }
   return group;
 }

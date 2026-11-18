@@ -26,7 +26,8 @@ The app works without the API; sharing and reading product links need it.
 | Draw precisely | while drawing, type a length and `Enter`; hold `⇧` to lock the angle to 15° |
 | Move / resize a wall | drag a selected wall across itself; click its length tag to type a new length |
 | Measure / dimensions | `M`, click two points (`Esc` clears) · `L` shows every wall's length · `0` zooms to fit |
-| Move things | drag a selected door, window or furniture; arrows nudge (`⇧` = fine); `⌘D` duplicates furniture |
+| Move things | drag a selected door, window or furniture; arrows nudge (`⇧` = fine); `⌘D` duplicates furniture. Furniture is solid: it stops against walls and other pieces and slides along them; hold `⌥` to let it overlap |
+| Put things on things | place a small item (plates, a lamp) over a table and it stands on the table top; move the table and they go with it. Select one for **On top** / **On the floor** |
 | Doors / windows | `D` / `N`, hover a wall, click to place; select one to edit width |
 | Name a room | select tool, double-click the room label |
 | Place furniture | `F` opens the palette, click an item, click to place, `R` rotates |
@@ -48,6 +49,14 @@ The app works without the API; sharing and reading product links need it.
 | Every shortcut | `?` |
 
 Walls snap to a 0.5 m grid and to existing endpoints, so loops close cleanly.
+A placed piece stores only where it stands on the plan, never a height: what
+it rests on is worked out from what is beneath it (`src/stacking.ts`) — a
+bigger footprint carries a smaller one, catalog furniture stays on the floor
+(except on a stage), and small tabletop items go on top. The same model of
+where things are makes furniture solid while you move it (`src/solidity.ts`):
+its parts are blocks with heights, so a chair tucks under a table until its
+back meets the top. Only the piece in hand is held back; nothing already in
+the plan is ever moved.
 Closed loops auto-detect as rooms (T-junctions count). Doors and windows split
 the wall into pieces — side segments, lintel, sill — no boolean geometry anywhere.
 
@@ -91,7 +100,8 @@ Every style except the maquette is built from real assets, all CC0 and all in
 - **Furniture** — low-poly models from the Kenney Furniture Kit in
   `public/models`, stretched to each catalog item's footprint and recoloured
   from the style (`src/three/furnitureModels.ts`). Product items from links
-  keep their own Claude-built models.
+  keep their own Claude-built models. Each piece stands on whatever is under
+  it: plates on the table top, a lamp on a sideboard, a speaker on the stage.
 - **Light** — two HDR skies from Poly Haven in `public/sky` light the model;
   the sun follows the time-of-day slider, and from 18:00 the rooms light up
   from inside. The sky you *see* is drawn (a three-colour gradient that
@@ -111,6 +121,15 @@ Every style except the maquette is built from real assets, all CC0 and all in
 - **Windows** — dark glass that catches the sky, with curtains or a blind on
   the room side (chosen per window); at dusk the room glows behind them, the
   sill catches the light and a lantern burns by each outside door.
+- **Levels** — a wall may rise several storeys (`levels` on the wall, 1–12,
+  set in the plan's data; there is no control for it yet). It stands that
+  many wall heights tall, every window repeats on each level (frame, glass,
+  sill, curtain, its glow at dusk) and a door stays on the ground with solid
+  wall above. Each room is roofed at the height of its outside walls, so
+  separate buildings get their own roof heights and a low wing's roof runs in
+  under a tall one's wall; a wall between a taller room and something lower
+  is carried up to close it. Inside it is still one storey: floors, ceilings,
+  lamps and the walker keep to the wall height (`src/levels.ts`).
 - **The site** — a gravel strip along the foundation, a slab path that runs
   out through a picket gate to a lane, post-and-rail fencing, planting beds,
   three trees that flank the house, hedgerows and copses beyond the fence,
@@ -156,13 +175,29 @@ anything while the model is still:
 - **Room details** — rugs, framed pictures, mirrors, lamps, cushions and
   throws, books, towels, a bench by the front door: placed around the plan's
   own furniture, doors and windows, the same every time, never part of the
-  plan (`src/three/decor.ts`). Style → Room details turns them off.
+  plan (`src/three/decor.ts`). A table you have put things on is left as you
+  set it. Style → Room details turns them off.
 - **A photographer's camera** — from outside the camera is kept level and the
   picture shifted, so walls stand upright (Shot → Straight verticals); Shot
   also picks a Wide, Normal or Long lens. A soft vignette in both the live
   view and renders; renders trace through a real aperture focused on the
   house (`src/three/lens.ts`).
 - **Zoom goes where you point**, and Snapshot saves exactly what is on screen.
+- **Quick while it moves, full when it rests** — the shading and soft-focus
+  passes and a dense screen's extra pixels cost several times the scene
+  itself. While the camera moves (or something animates) the view draws a
+  plainer picture at one buffer pixel per screen point, and refreshes the
+  sun's shadows only now and then; a moment after everything stops it draws
+  the full one (`src/three/LivePost.tsx`). Snapshot always gets the full
+  picture.
+- **Large plans are folded together** — a house is one mesh per wall piece,
+  window frame and chair leg, so each can rise and be picked. A plan of many
+  buildings would be a hundred thousand of them, each a separate call to the
+  graphics card every frame; past a few thousand pieces a layer is merged
+  into one mesh per material (`src/three/bake.ts`). A campus-sized site also
+  goes without what belongs to one garden: grass blades, loose gravel, beds
+  along every wall, the fence, laid brick and tile, room details and the
+  room-by-room light capture.
 
 In the plan, clicking a door or window again with its own tool steps it to the
 next size: a door becomes a wide door, then a pair of leaves; a window gains
@@ -223,6 +258,6 @@ product-link reading works.
 
 ## Still out of scope
 
-Multiple storeys and stairs, curved walls, room layouts inside angled outlines
+Floors above the ground (levels are the outside of a building only) and stairs, curved walls, room layouts inside angled outlines
 (generation works on square-cornered footprints), photoreal image renders,
 accounts. Plans are concept designs, not construction documents.

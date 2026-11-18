@@ -27,6 +27,8 @@ export interface WallFace {
   /** Outline, (along, up), convex. */
   poly: P2[];
   outer: boolean;
+  /** Part of a wall cut at a height (where a shorter neighbour stops): it carries on the face below it. */
+  stacked?: boolean;
 }
 
 /** A face from two plan points, a height range and a normal. */
@@ -82,7 +84,10 @@ export function faceFromPoints(pts: V3[], nx: number, nz: number, outer: boolean
   };
 }
 
-/** The two long faces of a wall piece (not its cut ends). */
+/**
+ * The two long faces of a wall piece, and any end of it left standing in the
+ * open above a shorter wall (not its cut ends, which are hidden or are jambs).
+ */
 export function wallFaces(piece: WallPiece): WallFace[] {
   const { poly, y0, y1 } = piece;
   const n = poly.length;
@@ -95,7 +100,7 @@ export function wallFaces(piece: WallPiece): WallFace[] {
   const out: WallFace[] = [];
   for (let i = 0; i < n; i++) {
     const side = piece.sides[i];
-    if (side !== 'p' && side !== 'm') continue;
+    if (side !== 'p' && side !== 'm' && side !== 'end') continue;
     const a = poly[i];
     const b = poly[(i + 1) % n];
     const len = Math.hypot(b.x - a.x, b.y - a.y);
@@ -106,7 +111,9 @@ export function wallFaces(piece: WallPiece): WallFace[] {
       nx = -nx;
       nz = -nz;
     }
-    const face = uprightFace(a.x, a.y, b.x, b.y, y0, y1, nx, nz, side === 'p' ? piece.pOuter : piece.mOuter);
+    const outer = side === 'p' ? piece.pOuter : side === 'm' ? piece.mOuter : piece.pOuter || piece.mOuter;
+    const face = uprightFace(a.x, a.y, b.x, b.y, y0, y1, nx, nz, outer);
+    if (face && piece.stacked) face.stacked = true;
     if (face) out.push(face);
   }
   return out;
@@ -286,7 +293,8 @@ export function layCornerBoards(soup: Soup, faces: WallFace[], colorHex: string)
         // Outward corner: this wall runs off behind the other one's face.
         return a.away * (a.f.dx * b.f.nx + a.f.dz * b.f.nz) < -0.01;
       });
-      if (!turns || a.y0 > 0.01) continue;
+      // From the ground up; a piece cut off a taller wall carries its board on up.
+      if (!turns || (a.y0 > 0.01 && !a.f.stacked)) continue;
       const f = a.f;
       // From just past the corner (to meet the other board) to a hand's width along the wall.
       const [s0, s1] = [a.s - a.away * proud, a.s + a.away * width];

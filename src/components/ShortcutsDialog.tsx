@@ -13,6 +13,7 @@ const ROWS: [string, string[]][] = [
   ['Rotate furniture', ['R']],
   ['Duplicate furniture', ['⌘D']],
   ['Nudge selection', ['← ↑ ↓ →']],
+  ['Let furniture overlap', ['⌥', 'drag']],
   ['Exact wall length', ['type it', 'Enter']],
   ['Lock angle to 15°', ['⇧']],
   ['Delete selection', ['⌫']],

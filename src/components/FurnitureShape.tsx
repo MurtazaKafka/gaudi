@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { Arc, Circle, Ellipse, Group, Line, Rect, Shape, Text } from 'react-konva';
 import type Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
@@ -10,7 +10,8 @@ import { beginGesture, endGesture } from '../history';
 import { ptEq } from '../geometry';
 import { currentUnits } from '../units';
 import { theme } from '../theme';
-import { placeFurniture } from './plan/actions';
+import { nearestFit } from '../solidity';
+import { canEdit, placeFurniture, takeInHand, type InHand } from './plan/actions';
 import { fineStep, snapPointTo } from './plan/drafting';
 import type { DrawingLook } from './plan/look';
 import { planShapes, traceShape, traceShapes } from './plan/symbol';
@@ -26,10 +27,23 @@ function clickFurniture(id: string, additive: boolean): void {
   ui.setFurnitureSelection(ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]);
 }
 
+/** A drag in progress: the pieces in hand, the last pointer spot, the last spot that fitted, and whether it fits now. */
+interface Drag extends InHand {
+  last: Point;
+  free: boolean;
+  fit: { dx: number; dy: number };
+  blocked: boolean;
+}
+
 /**
  * One furniture item on the plan; draggable in select mode. In the Color look
  * it is drawn from above out of its real parts and colours; in the Paper look,
  * and for ghosts (previews, placement), as a line symbol.
+ *
+ * A dragged item is solid (solidity.ts): it stops flush against walls and
+ * other pieces, slides along them, and where nothing near fits it shows red
+ * under the pointer and goes back where it came from if let go there. ⌥ lets
+ * it pass through, as before.
  */
 export const FurnitureShape = memo(function FurnitureShape({
   item,
@@ -37,6 +51,7 @@ export const FurnitureShape = memo(function FurnitureShape({
   selected,
   interactive,
   ghost = false,
+  invalid = false,
   look = 'paper',
 }: {
   item: Omit<Furniture, 'id'> & { id: string };
@@ -44,6 +59,8 @@ export const FurnitureShape = memo(function FurnitureShape({
   selected: boolean;
   interactive: boolean;
   ghost?: boolean;
+  /** Nothing near fits: drawn as "does not fit" (the placement ghost). */
+  invalid?: boolean;
   look?: DrawingLook;
 }) {
   // Custom definitions live in the plan: re-render when this one changes.
@@ -52,12 +69,13 @@ export const FurnitureShape = memo(function FurnitureShape({
   );
   const def: FurnitureDef = custom ?? furnitureDef(item.kind);
   const thin = 1.1 / scale;
-  const stroke = ghost || selected ? theme.accent : theme.furnitureLine;
+  const stroke = invalid ? theme.invalid : ghost || selected ? theme.accent : theme.furnitureLine;
   const fill = ghost ? 'rgba(193, 78, 51, 0.06)' : 'rgba(252, 251, 248, 0.85)';
   // A custom item whose definition is gone keeps its crossed placeholder in either look.
   const furnished = look === 'color' && !ghost && !(isCustomKind(item.kind) && !custom);
 
-  const drag = useRef<{ start: Map<string, Point>; last: Point } | null>(null);
+  const drag = useRef<Drag | null>(null);
+  const [blocked, setBlocked] = useState(false);
   useEffect(
     () => () => {
       if (drag.current) {
@@ -67,6 +85,7 @@ export const FurnitureShape = memo(function FurnitureShape({
     },
     [],
   );
+  const doesNotFit = invalid || blocked;
 
   return (
     <Group
@@ -90,25 +109,41 @@ export const FurnitureShape = memo(function FurnitureShape({
           ids = [item.id];
           ui.setFurnitureSelection(ids);
         }
-        const start = new Map<string, Point>();
-        for (const f of usePlanStore.getState().furniture) {
-          if (ids.includes(f.id)) start.set(f.id, { x: f.x, y: f.y });
-        }
-        drag.current = { start, last: { x: item.x, y: item.y } };
+        // Whatever stands on what is dragged rides along (frozen now: a plate passed over on the way is not picked up).
+        drag.current = { ...takeInHand(ids), last: { x: item.x, y: item.y }, free: false, fit: { dx: 0, dy: 0 }, blocked: false };
         beginGesture();
       }}
       onDragMove={(e) => {
         const d = drag.current;
         const from = d?.start.get(item.id);
         if (!d || !from) return;
-        // Same snap as placement, so a dragged item lands where a placed one would.
+        // Same snap as placement, so a dragged item lands where a placed one would; then it is kept out of things.
         const p = snapPointTo(e.target.position(), fineStep(currentUnits()));
-        e.target.position(p);
-        if (ptEq(p, d.last)) return;
+        const free = e.evt.altKey;
+        if (ptEq(p, d.last) && free === d.free) {
+          e.target.position(d.blocked ? p : { x: from.x + d.fit.dx, y: from.y + d.fit.dy });
+          return;
+        }
         d.last = p;
-        placeFurniture(d.start, { x: p.x - from.x, y: p.y - from.y });
+        d.free = free;
+        let dx = p.x - from.x;
+        let dy = p.y - from.y;
+        const spot = free ? { dx, dy, fits: true } : nearestFit(d.world, d.hand, dx, dy, { from: d.fit });
+        d.blocked = !spot.fits;
+        if (spot.fits) {
+          dx = spot.dx;
+          dy = spot.dy;
+          d.fit = { dx, dy };
+        }
+        setBlocked(d.blocked);
+        e.target.position({ x: from.x + dx, y: from.y + dy });
+        placeFurniture(d.start, { x: dx, y: dy });
       }}
       onDragEnd={(e) => {
+        const d = drag.current;
+        // Let go where nothing fits: everything goes back exactly as it was, and no undo step is left.
+        if (d?.blocked && canEdit()) usePlanStore.setState({ furniture: d.furniture });
+        setBlocked(false);
         const now = usePlanStore.getState().furniture.find((f) => f.id === item.id);
         if (now) e.target.position({ x: now.x, y: now.y });
         if (!drag.current) return;
@@ -142,7 +177,21 @@ export const FurnitureShape = memo(function FurnitureShape({
           />
         </Group>
       )}
-      {selected && !ghost && (
+      {doesNotFit && (
+        // "Does not fit": the plan's own red for "can't go here", as a door ghost on a wall too short for it.
+        <Rect
+          x={-def.w / 2}
+          y={-def.d / 2}
+          width={def.w}
+          height={def.d}
+          fill={theme.invalidSoft}
+          stroke={theme.invalid}
+          strokeWidth={1.2 / scale}
+          dash={[4 / scale, 3 / scale]}
+          listening={false}
+        />
+      )}
+      {selected && !ghost && !doesNotFit && (
         <Rect
           x={-def.w / 2 - 3 / scale}
           y={-def.d / 2 - 3 / scale}

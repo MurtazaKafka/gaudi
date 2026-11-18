@@ -13,6 +13,7 @@
  * exporting the same plan twice gives the same file. Pure.
  */
 import { openingHeights } from '../build';
+import { levelsOf } from '../levels';
 import type { PlanData, Point } from '../types';
 import { buildModel } from './model';
 import { fileStem } from './text';
@@ -174,6 +175,8 @@ export function planToIfc(plan: PlanData, opts: IfcOptions = {}): string {
   const contained: string[] = [];
 
   // ----- walls, with their openings, doors and windows -----
+  // Each wall stands its own levels high (levels.ts); a window repeats on every level, a door stays on the ground.
+  const levels = new Map(plan.walls.map((w) => [w.id, levelsOf(w)]));
   model.body.runs.forEach((run, i) => {
     const d = run.dir;
     const n = { x: -d.y, y: d.x };
@@ -184,8 +187,9 @@ export function planToIfc(plan: PlanData, opts: IfcOptions = {}): string {
       return { x: vx * d.x + vy * d.y, y: -(vx * n.x + vy * n.y) };
     });
     const key = `${run.wallId}|${Math.round(run.s0 * 1000)}`;
+    const rows = levels.get(run.wallId) ?? 1;
     const wall = add(
-      `IFCWALL(${guid(`wall|${key}`)},$,${str(`Wall ${i + 1}`)},$,$,${wallPlc},${extrude(polygonProfile(local), H)},$,.NOTDEFINED.)`,
+      `IFCWALL(${guid(`wall|${key}`)},$,${str(`Wall ${i + 1}`)},$,$,${wallPlc},${extrude(polygonProfile(local), H * rows)},$,.NOTDEFINED.)`,
     );
     contained.push(wall);
 
@@ -194,22 +198,26 @@ export function planToIfc(plan: PlanData, opts: IfcOptions = {}): string {
       const { y0, y1 } = openingHeights(gap.type, H);
       const height = y1 - y0;
       const mid = (gap.left + gap.right) / 2;
-      const openingPlc = placement(wallPlc, mid, 0, y0);
-      const opening = add(
-        `IFCOPENINGELEMENT(${guid(`opening|${gap.id}`)},$,'Opening',$,$,${openingPlc},${extrude(rectProfile(gap.width, T + 0.1), height)},$,.OPENING.)`,
-      );
-      add(`IFCRELVOIDSELEMENT(${guid(`voids|${gap.id}`)},$,$,$,${wall},${opening})`);
-      const fillPlc = placement(openingPlc, 0, 0, 0);
-      const filling =
-        gap.type === 'door'
-          ? add(
-              `IFCDOOR(${guid(`door|${gap.id}`)},$,${str(gap.label ?? 'Door')},$,$,${fillPlc},${extrude(rectProfile(gap.width, DOOR_LEAF), height)},$,${real(height)},${real(gap.width)},.DOOR.,.SINGLE_SWING_LEFT.,$)`,
-            )
-          : add(
-              `IFCWINDOW(${guid(`window|${gap.id}`)},$,${str(gap.label ?? 'Window')},$,$,${fillPlc},${extrude(rectProfile(gap.width, GLASS), height)},$,${real(height)},${real(gap.width)},.WINDOW.,.SINGLE_PANEL.,$)`,
-            );
-      add(`IFCRELFILLSELEMENT(${guid(`fills|${gap.id}`)},$,$,$,${opening},${filling})`);
-      contained.push(filling);
+      for (let level = 0; level < (gap.type === 'window' ? rows : 1); level++) {
+        // The ground row keeps the opening's own id, so a one-level plan writes the same file as ever.
+        const id = level === 0 ? gap.id : `${gap.id}|level ${level + 1}`;
+        const openingPlc = placement(wallPlc, mid, 0, y0 + level * H);
+        const opening = add(
+          `IFCOPENINGELEMENT(${guid(`opening|${id}`)},$,'Opening',$,$,${openingPlc},${extrude(rectProfile(gap.width, T + 0.1), height)},$,.OPENING.)`,
+        );
+        add(`IFCRELVOIDSELEMENT(${guid(`voids|${id}`)},$,$,$,${wall},${opening})`);
+        const fillPlc = placement(openingPlc, 0, 0, 0);
+        const filling =
+          gap.type === 'door'
+            ? add(
+                `IFCDOOR(${guid(`door|${id}`)},$,${str(gap.label ?? 'Door')},$,$,${fillPlc},${extrude(rectProfile(gap.width, DOOR_LEAF), height)},$,${real(height)},${real(gap.width)},.DOOR.,.SINGLE_SWING_LEFT.,$)`,
+              )
+            : add(
+                `IFCWINDOW(${guid(`window|${id}`)},$,${str(gap.label ?? 'Window')},$,$,${fillPlc},${extrude(rectProfile(gap.width, GLASS), height)},$,${real(height)},${real(gap.width)},.WINDOW.,.SINGLE_PANEL.,$)`,
+              );
+        add(`IFCRELFILLSELEMENT(${guid(`fills|${id}`)},$,$,$,${opening},${filling})`);
+        contained.push(filling);
+      }
     }
   });
 
@@ -241,7 +249,8 @@ export function planToIfc(plan: PlanData, opts: IfcOptions = {}): string {
   for (const item of model.furniture) {
     const c = Math.cos(item.rotation);
     const s = Math.sin(item.rotation);
-    const plc = placement(storeyPlc, item.x, -item.y, 0, { x: c, y: -s });
+    // Raised to what it stands on: a plate sits on the table, not in it.
+    const plc = placement(storeyPlc, item.x, -item.y, Number.isFinite(item.z) ? item.z : 0, { x: c, y: -s });
     const label = item.tag ? `${item.label} (${item.tag})` : item.label;
     contained.push(
       add(
