@@ -1,11 +1,11 @@
 /**
  * Selecting several things at once: any mix of walls, doors and windows, and
- * furniture, and what a dragged rectangle touches. Pure — no store, no DOM —
+ * furniture, and what a dragged rectangle holds. Pure — no store, no DOM —
  * so the rules can be tested on plain data; `actions.ts` and the canvas do
  * the wiring.
  */
 import type { FurnitureKind } from '../../catalog';
-import { dist, quadsOverlap, rectCorners } from '../../geometry';
+import { dist, rectCorners } from '../../geometry';
 import type { Opening, PlanData, Point, Wall } from '../../types';
 
 /** What is selected on the plan: any mix of walls, doors/windows and furniture. */
@@ -57,35 +57,16 @@ export function boxOf(a: Point, b: Point): Box {
 
 const finite = (...v: number[]): boolean => v.every(Number.isFinite);
 
-/** Does the segment a→b lie in, cross or touch the box? (Liang–Barsky clipping.) */
-export function segmentTouchesBox(a: Point, b: Point, box: Box): boolean {
-  if (!finite(a.x, a.y, b.x, b.y, box.x0, box.y0, box.x1, box.y1)) return false;
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  let t0 = 0;
-  let t1 = 1;
-  // Each side of the box: p·t <= q keeps the part of the segment on its inner side.
-  const sides: [number, number][] = [
-    [-dx, a.x - box.x0],
-    [dx, box.x1 - a.x],
-    [-dy, a.y - box.y0],
-    [dy, box.y1 - a.y],
-  ];
-  for (const [p, q] of sides) {
-    if (p === 0) {
-      if (q < 0) return false; // parallel to this side and outside it
-      continue;
-    }
-    const t = q / p;
-    if (p < 0) {
-      if (t > t1) return false;
-      if (t > t0) t0 = t;
-    } else {
-      if (t < t0) return false;
-      if (t < t1) t1 = t;
-    }
-  }
-  return t0 <= t1;
+/** Is `p` in the box (its edge counts)? */
+export function inBox(p: Point, box: Box): boolean {
+  const e = 1e-6;
+  return (
+    finite(p.x, p.y, box.x0, box.y0, box.x1, box.y1) &&
+    p.x >= box.x0 - e &&
+    p.x <= box.x1 + e &&
+    p.y >= box.y0 - e &&
+    p.y <= box.y1 + e
+  );
 }
 
 /** The two ends of an opening on its wall, or null when the wall has no length. */
@@ -103,36 +84,33 @@ function openingSpan(o: Opening, wall: Wall): [Point, Point] | null {
 }
 
 /**
- * Everything the rectangle touches, as on a desktop: a wall or an opening it
- * crosses or holds, furniture whose footprint it overlaps. Ids come out in
- * plan order, so the same rectangle always gives the same selection.
+ * Everything wholly inside the rectangle: a wall or an opening with both ends
+ * in it, furniture with its whole footprint in it. Only whole things, because
+ * walls are split where they meet: a box round one room would otherwise also
+ * take the pieces of its neighbours' walls that meet its corners. Ids come out
+ * in plan order, so the same rectangle always gives the same selection.
  */
 export function marqueeHits(
   plan: Pick<PlanData, 'walls' | 'openings' | 'furniture'>,
   box: Box,
   sizeOf: (kind: FurnitureKind) => { w: number; d: number },
 ): PlanSelection {
-  const corners: Point[] = [
-    { x: box.x0, y: box.y0 },
-    { x: box.x1, y: box.y0 },
-    { x: box.x1, y: box.y1 },
-    { x: box.x0, y: box.y1 },
-  ];
+  const inside = (p: Point) => inBox(p, box);
   const wallById = new Map(plan.walls.map((w) => [w.id, w]));
   return {
-    walls: plan.walls.filter((w) => segmentTouchesBox(w.a, w.b, box)).map((w) => w.id),
+    walls: plan.walls.filter((w) => inside(w.a) && inside(w.b)).map((w) => w.id),
     openings: plan.openings
       .filter((o) => {
         const wall = wallById.get(o.wallId);
         const span = wall ? openingSpan(o, wall) : null;
-        return !!span && segmentTouchesBox(span[0], span[1], box);
+        return !!span && span.every(inside);
       })
       .map((o) => o.id),
     furniture: plan.furniture
       .filter((f) => {
         const { w, d } = sizeOf(f.kind);
         if (!finite(f.x, f.y, f.rotation, w, d)) return false;
-        return quadsOverlap(rectCorners(f.x, f.y, w, d, f.rotation), corners);
+        return rectCorners(f.x, f.y, w, d, f.rotation).every(inside);
       })
       .map((f) => f.id),
   };

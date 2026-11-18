@@ -309,7 +309,7 @@ export function toggleOnPlan(kind: keyof PlanSelection, id: string): void {
   selectOnPlan(toggleInSelection(standingSelection(), kind, id));
 }
 
-/** Select what the rectangle between two plan points touches, on top of `base`. */
+/** Select what lies wholly inside the rectangle between two plan points, on top of `base`. */
 export function selectInBox(a: Point, b: Point, base: PlanSelection): void {
   if (!canEdit()) return;
   const hits = marqueeHits(usePlanStore.getState(), boxOf(a, b), furnitureDef);
