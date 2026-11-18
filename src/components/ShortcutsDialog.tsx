@@ -15,6 +15,7 @@ const ROWS: [string, string[]][] = [
   ['Select everything', ['⌘A']],
   ['Copy / cut / paste', ['⌘C', '⌘X', '⌘V']],
   ['Duplicate selection', ['⌘D']],
+  ['Move the selection together', ['drag it']],
   ['Nudge selection', ['← ↑ ↓ →']],
   ['Let furniture overlap', ['⌥', 'drag']],
   ['Exact wall length', ['type it', 'Enter']],

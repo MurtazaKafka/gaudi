@@ -18,11 +18,15 @@ import type { Furniture, Opening, OpeningType, Point, Tool } from '../types';
 import { FurnitureShape } from './FurnitureShape';
 import { RoomAiPanel } from './RoomAiPanel';
 import {
+  beginGroupDrag,
   copySelection,
+  currentSelection,
   cutSelection,
   deleteSelection,
   duplicateSelection,
+  endGroupDrag,
   hasClipboard,
+  moveGroupDrag,
   nudgeSelection,
   pasteClipboard,
   roomsFor,
@@ -32,7 +36,7 @@ import {
   selectOnPlan,
   standingSelection,
 } from './plan/actions';
-import { clickSwallowed, NO_SELECTION, swallowNextClick, type PlanSelection } from './plan/marquee';
+import { clickSwallowed, groupSelected, NO_SELECTION, swallowNextClick, type PlanSelection } from './plan/marquee';
 import { setEditorDriver } from './plan/devHandle';
 import {
   arrowDelta,
@@ -138,6 +142,18 @@ function stepOpening(opening: Opening): void {
   }
 }
 
+/** The plan item a canvas node draws (`planItem` attr on it or an ancestor), if any. */
+function planItemOf(node: Konva.Node | null): { kind: keyof PlanSelection; id: string } | null {
+  for (let n = node; n; n = n.getParent()) {
+    const v: unknown = n.getAttr('planItem');
+    if (typeof v !== 'string') continue;
+    const i = v.indexOf(':');
+    const kind = v.slice(0, i);
+    return kind === 'walls' || kind === 'openings' || kind === 'furniture' ? { kind, id: v.slice(i + 1) } : null;
+  }
+  return null;
+}
+
 const sameGhost = (a: OpeningGhost | null, b: OpeningGhost | null): boolean =>
   a === b ||
   (!!a && !!b && a.wallId === b.wallId && a.valid === b.valid && Math.abs(a.offset - b.offset) < 1e-9);
@@ -218,6 +234,13 @@ export function PlanCanvas() {
   /** The selection rectangle being dragged (plan meters), and how to end it. */
   const [marquee, , setMarquee] = useRefState<{ a: Point; b: Point } | null>(null);
   const marqueeDrag = useRef<{ stop: () => void; cancel: () => void } | null>(null);
+  /** The selection being moved as one piece: how to show it again (⇧ or ⌥ changed), keep it, or put it back. */
+  const groupDrag = useRef<{ again: (shift: boolean, alt: boolean) => void; stop: () => void; cancel: () => void } | null>(
+    null,
+  );
+  const [groupMoving, setGroupMoving] = useState(false);
+  /** Furniture in it, moving without walls, is where nothing near fits (drawn red; it goes back if let go). */
+  const [groupBlocked, setGroupBlocked] = useState(false);
 
   const setSnap = (next: SnapResult | null) => {
     const cur = snapRef.current;
@@ -369,6 +392,111 @@ export function PlanCanvas() {
   };
   useEffect(() => () => marqueeDrag.current?.stop(), []);
 
+  /** Client pixels → plan meters, with the view as it is now (it may pan or zoom mid-drag). */
+  const clientToWorld = (clientX: number, clientY: number): Point | null => {
+    const r = containerRef.current?.getBoundingClientRect();
+    return r ? toWorld(viewRef.current, clientX - r.left, clientY - r.top) : null;
+  };
+
+  /**
+   * A press on a selected part of a selection that moves as one piece (two or
+   * more walls, or more than one kind of thing): everything selected follows
+   * the pointer together, and walls joined to it follow as groupMove.ts says.
+   * Followed on the window, so it always ends; until it has travelled a few
+   * pixels it is still a click. ⇧ keeps it to one axis, ⌥ lets furniture
+   * through things, Esc puts everything back. A mouse is followed by its own
+   * events, as the canvas library does; a touch or a pen (`pen`) by pointer events.
+   */
+  const startGroupDrag = (ev: MouseEvent | PointerEvent, pen: boolean): boolean => {
+    if (groupDrag.current) return false;
+    const start = clientToWorld(ev.clientX, ev.clientY);
+    const d = start ? beginGroupDrag() : null;
+    if (!start || !d) return false;
+    marqueeDrag.current?.stop();
+    const id = pen && 'pointerId' in ev ? ev.pointerId : null;
+    const ours = (e: MouseEvent) => id === null || ('pointerId' in e && e.pointerId === id);
+    const move = pen ? 'pointermove' : 'mousemove';
+    const up = pen ? 'pointerup' : 'mouseup';
+    const origin = { x: ev.clientX, y: ev.clientY };
+    let last = { x: ev.clientX, y: ev.clientY, shift: ev.shiftKey, alt: ev.altKey };
+    let active = false;
+
+    const show = () => {
+      const p = clientToWorld(last.x, last.y);
+      if (!p) return;
+      const res = moveGroupDrag(d, { x: p.x - start.x, y: p.y - start.y }, { lock: last.shift, free: last.alt });
+      if (res === 'lost') finish('lost');
+      else setGroupBlocked(d.blocked);
+    };
+    const onMove = (e: MouseEvent) => {
+      if (!ours(e)) return;
+      if (e.buttons === 0) {
+        finish('drop'); // the release happened somewhere we never heard about
+        return;
+      }
+      if (!active && Math.hypot(e.clientX - origin.x, e.clientY - origin.y) < MARQUEE_START_PX) return;
+      if (!active) {
+        active = true;
+        setGroupMoving(true);
+      }
+      last = { x: e.clientX, y: e.clientY, shift: e.shiftKey, alt: e.altKey };
+      show();
+    };
+    const onUp = (e: MouseEvent) => {
+      if (!ours(e) || (id === null && e.button !== 0)) return;
+      // To the canvas the release is also a click on what was grabbed, which would select it alone.
+      if (active) swallowNextClick();
+      finish('drop');
+    };
+    // The browser took the touch for itself.
+    const onCancel = (e: PointerEvent) => {
+      if (ours(e)) finish('cancel');
+    };
+    // A finger moving things must not also scroll or zoom the page.
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.cancelable) e.preventDefault();
+    };
+    const onBlur = () => finish('drop');
+    const handle = {
+      again: (shift: boolean, alt: boolean) => {
+        last = { ...last, shift, alt };
+        if (active) show();
+      },
+      stop: () => finish('drop'),
+      cancel: () => finish('cancel'),
+    };
+    const finish = (how: 'drop' | 'cancel' | 'lost') => {
+      if (groupDrag.current !== handle) return;
+      groupDrag.current = null;
+      window.removeEventListener(move, onMove);
+      window.removeEventListener(up, onUp, true);
+      window.removeEventListener('pointercancel', onCancel);
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('blur', onBlur);
+      setGroupMoving(false);
+      setGroupBlocked(false);
+      endGroupDrag(d, how);
+    };
+    groupDrag.current = handle;
+    window.addEventListener(move, onMove);
+    window.addEventListener(up, onUp, true);
+    if (pen) {
+      window.addEventListener('pointercancel', onCancel);
+      window.addEventListener('touchmove', onTouchMove, { passive: false });
+    }
+    window.addEventListener('blur', onBlur);
+    return true;
+  };
+  useEffect(() => () => groupDrag.current?.stop(), []);
+
+  /** A press on `target`: if it is a selected part of a selection that moves as one piece, move all of it. */
+  const grabSelection = (target: Konva.Node, ev: MouseEvent | PointerEvent, pen: boolean): boolean => {
+    const ui = useUiStore.getState();
+    if (ui.readOnly || ui.tool !== 'select' || !groupSelected(ui)) return false;
+    const hit = planItemOf(target);
+    return !!hit && currentSelection()[hit.kind].includes(hit.id) && startGroupDrag(ev, pen);
+  };
+
   /** A left press with the current tool. `bare` = nothing was under the pointer. */
   const pointerDown = (raw: Point, shift: boolean, bare: boolean, alt = false) => {
     pointer.current = { raw, shift, alt };
@@ -463,13 +591,22 @@ export function PlanCanvas() {
     const stage = stageRef.current;
     const pos = stage?.getPointerPosition();
     if (!pos || e.evt.button !== 0) return;
+    // A pen's press, already being followed as one (handlePointerDown).
+    if (groupDrag.current) return;
     const raw = toWorld(view, pos.x, pos.y);
     const bare = e.target === stage;
+    if (!bare && grabSelection(e.target, e.evt, false)) return;
     const ui = useUiStore.getState();
     // What was selected before this press clears it: Esc on the rectangle puts it back.
     const prior = standingSelection();
     pointerDown(raw, e.evt.shiftKey, bare, e.evt.altKey);
     if (ui.tool === 'select' && !ui.readOnly && (bare || e.target.hasName(ROOM_FILL))) startMarquee(raw, e.evt, prior);
+  };
+
+  // A touch or a pen can move the selection as one piece too (a mouse comes through handleMouseDown).
+  const handlePointerDown = (e: KonvaEventObject<PointerEvent>) => {
+    if (e.evt.pointerType === 'mouse' || !e.evt.isPrimary || e.target === stageRef.current) return;
+    grabSelection(e.target, e.evt, true);
   };
 
   const handleMouseLeave = () => {
@@ -493,6 +630,15 @@ export function PlanCanvas() {
     const ui = useUiStore.getState();
     // Nothing on the canvas reacts behind the command bar, the shortcut sheet or the API-key dialog.
     if (ui.mode !== 'plan' || ui.commandOpen || ui.shortcutsOpen || useKeyStore.getState().asking) return;
+
+    // While the selection is being moved: Esc puts it back, ⇧ and ⌥ change the move at once, nothing else.
+    if (groupDrag.current) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        groupDrag.current.cancel();
+      } else if (e.key === 'Shift' || e.key === 'Alt') groupDrag.current.again(e.shiftKey, e.altKey);
+      return;
+    }
 
     if (e.key === 'Shift') {
       // Lock / release the angle without waiting for the mouse to move.
@@ -642,6 +788,7 @@ export function PlanCanvas() {
   });
 
   const onKeyUp = useEffectEvent((e: KeyboardEvent) => {
+    if ((e.key === 'Shift' || e.key === 'Alt') && groupDrag.current) groupDrag.current.again(e.shiftKey, e.altKey);
     if (e.key === 'Shift' && pointer.current?.shift) {
       pointer.current.shift = false;
       refresh();
@@ -672,6 +819,7 @@ export function PlanCanvas() {
         s.fitNonce !== prev.fitNonce || s.readOnly !== prev.readOnly || s.mode !== prev.mode;
       if (!toolChanged && !swapped) return;
       marqueeDrag.current?.stop();
+      groupDrag.current?.stop();
       if (swapped || s.tool !== 'wall') {
         setAnchor(null);
         setTyped('');
@@ -846,17 +994,21 @@ export function PlanCanvas() {
 
   const cursorStyle = panning
     ? 'grabbing'
-    : spaceDown
-      ? 'grab'
-      : tool !== 'select' || marquee
-        ? 'crosshair'
-        : (hoverCursor ?? 'default');
+    : groupMoving
+      ? 'move'
+      : spaceDown
+        ? 'grab'
+        : tool !== 'select' || marquee
+          ? 'crosshair'
+          : (hoverCursor ?? 'default');
 
   // Handles, length tags and inspectors belong to a selection of one kind of thing;
   // a mixed one (a rectangle, a paste) is only highlighted, to be moved, copied or deleted whole.
   const kinds =
     Number(selectedWallIds.length > 0) + Number(selectedOpeningIds.length > 0) + Number(selectedFurnitureIds.length > 0);
   const oneKind = editing && kinds === 1 && !marquee;
+  // Dragging any selected part of it moves all of it (startGroupDrag), not just that part.
+  const grouped = editing && groupSelected({ selectedWallIds, selectedOpeningIds, selectedFurnitureIds });
   const handleWallIds = oneKind && selectedWallIds.length <= MAX_WALL_HANDLES ? selectedWallIds : NO_IDS;
   const selectedWalls = handleWallIds.length ? walls.filter((w) => handleWallIds.includes(w.id)) : [];
   const selectedOpening =
@@ -897,6 +1049,7 @@ export function PlanCanvas() {
         scaleY={view.scale}
         onMouseMove={handleMouseMove}
         onMouseDown={handleMouseDown}
+        onPointerDown={handlePointerDown}
         onMouseLeave={handleMouseLeave}
         onContextMenu={handleContextMenu}
       >
@@ -922,16 +1075,21 @@ export function PlanCanvas() {
             />
           ))}
 
-          {drawOrder.map((f) => (
-            <FurnitureShape
-              key={f.id}
-              item={f}
-              scale={view.scale}
-              selected={editing && selectedFurnitureIds.includes(f.id)}
-              interactive={editing}
-              look={color ? 'color' : 'paper'}
-            />
-          ))}
+          {drawOrder.map((f) => {
+            const selected = editing && selectedFurnitureIds.includes(f.id);
+            return (
+              <FurnitureShape
+                key={f.id}
+                item={f}
+                scale={view.scale}
+                selected={selected}
+                grouped={selected && grouped}
+                invalid={selected && grouped && groupBlocked}
+                interactive={editing}
+                look={color ? 'color' : 'paper'}
+              />
+            );
+          })}
 
           {/* AI suggestion preview ghosts — only for a room that is still there, never in a read-only view */}
           {aiStatus === 'preview' &&
@@ -956,18 +1114,22 @@ export function PlanCanvas() {
               hoverId={editing ? hoverWallId : null}
             />
           )}
-          {walls.map((w) => (
-            <WallLine
-              key={w.id}
-              wall={w}
-              thickness={settings.wallThickness}
-              scale={view.scale}
-              selected={editing && selectedWallIds.includes(w.id)}
-              interactive={editing}
-              poche={color}
-              onHover={setHoverWallId}
-            />
-          ))}
+          {walls.map((w) => {
+            const selected = editing && selectedWallIds.includes(w.id);
+            return (
+              <WallLine
+                key={w.id}
+                wall={w}
+                thickness={settings.wallThickness}
+                scale={view.scale}
+                selected={selected}
+                grouped={selected && grouped}
+                interactive={editing}
+                poche={color}
+                onHover={setHoverWallId}
+              />
+            );
+          })}
 
           {showDimensions && (
             <WallDimensions
@@ -983,6 +1145,7 @@ export function PlanCanvas() {
           {openings.map((o) => {
             const wall = walls.find((w) => w.id === o.wallId);
             if (!wall) return null;
+            const selected = editing && selectedOpeningIds.includes(o.id);
             return (
               <OpeningShape
                 key={o.id}
@@ -990,7 +1153,8 @@ export function PlanCanvas() {
                 opening={o}
                 thickness={settings.wallThickness}
                 scale={view.scale}
-                selected={editing && selectedOpeningIds.includes(o.id)}
+                selected={selected}
+                grouped={selected && grouped}
                 interactive={editing}
                 look={color ? 'color' : 'paper'}
                 labelAt={openingLabels.get(o.id) ?? null}

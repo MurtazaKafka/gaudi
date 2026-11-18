@@ -45,7 +45,7 @@ export function StatusBar() {
     : readOnly && tool !== 'measure'
       ? VIEW_ONLY_HINT
       : tool === 'select' && selected > 1
-        ? `${selected} selected · arrows nudge · ⌘C copy · ⌘X cut · ⌘D duplicate · ⌫ delete · esc clears`
+        ? `${selected} selected · drag moves them together · arrows nudge · ⌘C copy · ⌘X cut · ⌘D duplicate · ⌫ delete · esc clears`
         : hints[tool];
   return (
     <footer className="statusbar">

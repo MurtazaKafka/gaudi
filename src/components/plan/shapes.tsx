@@ -22,6 +22,7 @@ import {
 } from './drafting';
 import { OPENING_LABEL_SIZE } from './labels';
 import type { DrawingLook } from './look';
+import { clickSwallowed, groupSelected } from './marquee';
 import { entranceMarkerSize, type Entrance, type Poche } from './poche';
 import type { GridLines } from './view';
 
@@ -57,12 +58,14 @@ function clickWall(id: string, additive: boolean): void {
 /**
  * A wall. Click selects; dragging the body of a selected wall slides it
  * across itself on the grid, taking its corners (and anything attached) along.
+ * In a selection that moves as one piece the canvas drags it with the rest.
  */
 export const WallLine = memo(function WallLine({
   wall,
   thickness,
   scale,
   selected,
+  grouped = false,
   interactive,
   poche = false,
   onHover,
@@ -71,6 +74,8 @@ export const WallLine = memo(function WallLine({
   thickness: number;
   scale: number;
   selected: boolean;
+  /** Selected, in a selection that moves as one piece: the canvas moves it (PlanCanvas `startGroupDrag`). */
+  grouped?: boolean;
   interactive: boolean;
   /** The wall body is drawn elsewhere (<WallPoche>): this is only the line to click and drag. */
   poche?: boolean;
@@ -106,10 +111,12 @@ export const WallLine = memo(function WallLine({
       lineCap="square"
       hitStrokeWidth={Math.max(thickness, 14 / scale)}
       listening={interactive}
+      planItem={`walls:${wall.id}`}
       cursor={selected ? 'move' : 'pointer'}
-      draggable={interactive && selected}
+      draggable={interactive && selected && !grouped}
       onClick={(e) => {
-        if (e.evt.button !== 0) return;
+        // The release that ends a move of the whole selection is not a click on this wall.
+        if (e.evt.button !== 0 || clickSwallowed()) return;
         e.cancelBubble = true;
         clickWall(wall.id, e.evt.shiftKey);
       }}
@@ -121,12 +128,14 @@ export const WallLine = memo(function WallLine({
         setHovered(false);
         onHover?.(null);
       }}
-      onDragStart={() => {
-        const { walls } = usePlanStore.getState();
-        const selectedIds = useUiStore.getState().selectedWallIds;
-        const ids = selectedIds.includes(wall.id) ? selectedIds : [wall.id];
+      onDragStart={(e) => {
+        // Pressed before this redrew as part of a selection that moves as one piece: the canvas has it.
+        if (groupSelected(useUiStore.getState())) {
+          e.target.stopDrag();
+          return;
+        }
         drag.current = {
-          groups: wallMoveGroups(walls, ids),
+          groups: wallMoveGroups(usePlanStore.getState().walls, [wall.id]),
           wall: { id: wall.id, a: { ...wall.a }, b: { ...wall.b } },
           last: { x: 0, y: 0 },
         };
@@ -368,6 +377,7 @@ export const OpeningShape = memo(function OpeningShape({
   thickness,
   scale,
   selected,
+  grouped = false,
   interactive,
   ghost = false,
   invalid = false,
@@ -379,6 +389,8 @@ export const OpeningShape = memo(function OpeningShape({
   thickness: number;
   scale: number;
   selected: boolean;
+  /** Selected, in a selection that moves as one piece: the canvas moves it (PlanCanvas `startGroupDrag`). */
+  grouped?: boolean;
   interactive: boolean;
   ghost?: boolean;
   /** A ghost where the opening can't go. */
@@ -432,7 +444,7 @@ export const OpeningShape = memo(function OpeningShape({
     );
   }
 
-  const canDrag = interactive && selected && !ghost;
+  const canDrag = interactive && selected && !ghost && !grouped;
   const color = look === 'color';
   // Color: the floor shows through a doorway, glass fills a window. Paper: the gap is bare paper.
   const gapFill = !color ? theme.paper : opening.type === 'door' ? theme.threshold : theme.glass;
@@ -459,9 +471,15 @@ export const OpeningShape = memo(function OpeningShape({
         rotation={deg}
         opacity={ghost ? 0.55 : 1}
         listening={interactive}
-        cursor={canDrag ? 'move' : 'pointer'}
+        planItem={ghost ? undefined : `openings:${opening.id}`}
+        cursor={canDrag || grouped ? 'move' : 'pointer'}
         draggable={canDrag}
-        onDragStart={() => {
+        onDragStart={(e) => {
+          // Pressed before this redrew as part of a selection that moves as one piece: the canvas has it.
+          if (groupSelected(useUiStore.getState())) {
+            e.target.stopDrag();
+            return;
+          }
           dragging.current = true;
           beginGesture();
         }}
@@ -557,7 +575,8 @@ export const OpeningShape = memo(function OpeningShape({
           height={thickness + 12 / scale}
           fill="transparent"
           onClick={(e) => {
-            if (e.evt.button !== 0) return;
+            // The release that ends a move of the whole selection is not a click on this door or window.
+            if (e.evt.button !== 0 || clickSwallowed()) return;
             e.cancelBubble = true;
             if (e.evt.shiftKey) toggleOnPlan('openings', opening.id);
             else useUiStore.getState().setOpeningSelection([opening.id]);

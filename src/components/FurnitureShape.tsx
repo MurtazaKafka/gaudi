@@ -14,6 +14,7 @@ import { nearestFit } from '../solidity';
 import { canEdit, placeFurniture, takeInHand, toggleOnPlan, type InHand } from './plan/actions';
 import { fineStep, snapPointTo } from './plan/drafting';
 import type { DrawingLook } from './plan/look';
+import { clickSwallowed, groupSelected } from './plan/marquee';
 import { planShapes, traceShape, traceShapes } from './plan/symbol';
 
 /** Click selects one item; Shift-click adds it to (or takes it out of) whatever is selected. */
@@ -38,12 +39,14 @@ interface Drag extends InHand {
  * A dragged item is solid (solidity.ts): it stops flush against walls and
  * other pieces, slides along them, and where nothing near fits it shows red
  * under the pointer and goes back where it came from if let go there. ⌥ lets
- * it pass through, as before.
+ * it pass through, as before. In a selection that moves as one piece the
+ * canvas drags it with the rest.
  */
 export const FurnitureShape = memo(function FurnitureShape({
   item,
   scale,
   selected,
+  grouped = false,
   interactive,
   ghost = false,
   invalid = false,
@@ -52,9 +55,11 @@ export const FurnitureShape = memo(function FurnitureShape({
   item: Omit<Furniture, 'id'> & { id: string };
   scale: number;
   selected: boolean;
+  /** Selected, in a selection that moves as one piece: the canvas moves it (PlanCanvas `startGroupDrag`). */
+  grouped?: boolean;
   interactive: boolean;
   ghost?: boolean;
-  /** Nothing near fits: drawn as "does not fit" (the placement ghost). */
+  /** Nothing near fits: drawn as "does not fit" (the placement ghost, or the selection being moved). */
   invalid?: boolean;
   look?: DrawingLook;
 }) {
@@ -88,17 +93,24 @@ export const FurnitureShape = memo(function FurnitureShape({
       y={item.y}
       rotation={(item.rotation * 180) / Math.PI}
       opacity={ghost ? 0.65 : 1}
-      draggable={interactive}
+      draggable={interactive && !grouped}
       listening={interactive}
       cursor="move"
+      planItem={ghost ? undefined : `furniture:${item.id}`}
       onClick={(e: KonvaEventObject<MouseEvent>) => {
-        if (e.evt.button !== 0) return;
+        // The release that ends a move of the whole selection is not a click on this item.
+        if (e.evt.button !== 0 || clickSwallowed()) return;
         e.cancelBubble = true;
         clickFurniture(item.id, e.evt.shiftKey);
       }}
-      onDragStart={() => {
-        // Dragging one of several selected items moves them together.
+      onDragStart={(e) => {
         const ui = useUiStore.getState();
+        // Pressed before this redrew as a selected part of a selection that moves as one piece: the canvas has it.
+        if (groupSelected(ui) && ui.selectedFurnitureIds.includes(item.id)) {
+          e.target.stopDrag();
+          return;
+        }
+        // Dragging one of several selected items moves them together.
         let ids = ui.selectedFurnitureIds;
         if (!ids.includes(item.id)) {
           ids = [item.id];
