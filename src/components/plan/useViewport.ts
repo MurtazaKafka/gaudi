@@ -14,6 +14,16 @@ export function isTypingTarget(el: EventTarget | null): boolean {
   );
 }
 
+/**
+ * Focus is in a panel or a dialog over the plan (the projects panel, the
+ * furniture palette and its product form, a dialog): copy, cut, paste and
+ * select-all there are the page's, not the plan's — a form may take a pasted
+ * photo even from a button.
+ */
+export function isInPanel(el: EventTarget | null): boolean {
+  return el instanceof Element && !!el.closest('aside, [role="dialog"]');
+}
+
 /** A button or link the keyboard is on — Space and Enter belong to it. */
 export function isKeyboardFocusedControl(el: EventTarget | null): boolean {
   if (!(el instanceof HTMLElement)) return false;

@@ -65,7 +65,7 @@ import {
   WallPoche,
 } from './plan/shapes';
 import { useRefState } from './plan/useRefState';
-import { isKeyboardFocusedControl, isTypingTarget, useViewport } from './plan/useViewport';
+import { isInPanel, isKeyboardFocusedControl, isTypingTarget, useViewport } from './plan/useViewport';
 import { buildGridLines, SNAP_RADIUS_PX, toScreen, toWorld, type View } from './plan/view';
 
 interface OpeningGhost {
@@ -518,6 +518,7 @@ export function PlanCanvas() {
     if (e.metaKey || e.ctrlKey) {
       // The chords the canvas owns: ⌘D ⌘C ⌘X ⌘V ⌘A. Everything else (⌘F, any of these with Shift…) is the browser's.
       if (e.altKey || e.shiftKey || ro) return;
+      if ('cxva'.includes(key) && isInPanel(e.target)) return;
       if (key === 'd') {
         e.preventDefault();
         if (!e.repeat) duplicateSelection();
