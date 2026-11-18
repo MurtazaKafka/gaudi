@@ -538,6 +538,9 @@ function nudgeParts(delta: Point, free: boolean): boolean {
 // ---------- moving the selection as one piece ----------
 
 /** What a refused move would have done, as the toast says it. */
+/** At most this many steps are tried when a drag goes past where the walls can go. */
+const MAX_WALK = 40;
+
 const REFUSED: Record<Refusal, string> = {
   short: 'A wall joined to it would get too short.',
   opening: 'A door or window would no longer fit on its wall.',
@@ -611,7 +614,9 @@ export function beginGroupDrag(): GroupDrag | null {
 /**
  * Show the selection moved by `raw` (plan meters from the press), snapped to
  * the drag's step unless `exact`; `lock` keeps it to one axis, `free` lets
- * furniture through things. A move that is refused leaves it where it was.
+ * furniture through things. A move the walls can't make takes the selection
+ * as far toward it as they can go, a step at a time, as if it ran into
+ * something; the toast says why it stopped.
  * 'lost' when the plan changed under the drag: end it, and leave the plan be.
  */
 export function moveGroupDrag(
@@ -623,22 +628,42 @@ export function moveGroupDrag(
   if (!canEdit() || s.walls !== d.wrote.walls || s.openings !== d.wrote.openings || s.furniture !== d.wrote.furniture) {
     return 'lost';
   }
-  const delta = opts.exact ? raw : dragDelta(raw, d.step, opts.lock);
+  let delta = opts.exact ? raw : dragDelta(raw, d.step, opts.lock);
   if (!Number.isFinite(delta.x) || !Number.isFinite(delta.y)) return 'held';
   if (ptEq(delta, d.shown) && opts.free === d.free) return 'held';
 
-  const res = moveGroup(d.move, delta, (key) => {
+  const newId = (key: string): string => {
     let id = d.ids.get(key);
     if (!id) d.ids.set(key, (id = crypto.randomUUID()));
     return id;
-  });
+  };
+  let res = moveGroup(d.move, delta, newId);
   if (!res.ok) {
-    d.refused = res.why;
+    const why = res.why;
     if (!d.told) {
       d.told = true;
-      toast(`Can’t move it that far: ${REFUSED[res.why].charAt(0).toLowerCase()}${REFUSED[res.why].slice(1)}`, { ms: 2600 });
+      toast(`Can’t move it that far: ${REFUSED[why].charAt(0).toLowerCase()}${REFUSED[why].slice(1)}`, { ms: 2600 });
     }
-    return 'held';
+    // However fast the pointer went past the limit, stop at the limit, not where the last move left it.
+    const from = d.shown;
+    const n = opts.exact ? 0 : Math.min(MAX_WALK, Math.ceil(dist(from, delta) / d.step));
+    let reached: { delta: Point; res: Extract<ReturnType<typeof moveGroup>, { ok: true }> } | null = null;
+    for (let k = 1; k < n; k++) {
+      const t = k / n;
+      const q = snapPointTo({ x: from.x + (delta.x - from.x) * t, y: from.y + (delta.y - from.y) * t }, d.step);
+      // ⇧ keeps every stop on the axis the move is held to, even when that axis just changed.
+      const p = opts.lock ? { x: delta.x === 0 ? 0 : q.x, y: delta.y === 0 ? 0 : q.y } : q;
+      if (ptEq(p, from) || (reached && ptEq(p, reached.delta))) continue;
+      const step = moveGroup(d.move, p, newId);
+      if (!step.ok) break;
+      reached = { delta: p, res: step };
+    }
+    if (!reached) {
+      d.refused = why;
+      return 'held';
+    }
+    delta = reached.delta;
+    res = reached.res;
   }
   d.refused = null;
 
