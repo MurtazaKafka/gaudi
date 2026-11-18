@@ -310,6 +310,18 @@ export function createFromTemplate(templateId: string): string | null {
   if (!template) return null;
   // Read the units after stepping out of any shared view: the user's habit, not the visitor plan's.
   leaveEphemeral();
+  if (template.big) {
+    // A whole campus is fetched, not built here: the project appears when it arrives.
+    const units = usePlanStore.getState().settings.units;
+    toast(`Opening ${template.name}…`);
+    void template.big.load().then(
+      (plan) => {
+        createProject({ ...plan, settings: { ...plan.settings, units } }, { template: template.id });
+      },
+      () => toastError(`${template.name} could not be opened. Check the connection and try again.`),
+    );
+    return `opening:${template.id}`;
+  }
   const { plan } = buildTemplate(template, { units: usePlanStore.getState().settings.units });
   return createProject(plan, { template: template.id });
 }

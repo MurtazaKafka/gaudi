@@ -8,6 +8,8 @@
 import { FURNITURE, type BuiltinKind } from '../catalog';
 import { layoutToPlan, normalizeLayout, OUTSIDE, type Layout, type LayoutRoom } from '../generate/layout';
 import type { Furniture, PlanData, Units } from '../types';
+import { DAVIDSON } from './davidson';
+import { HURT_HUB } from './hurtHub';
 
 type Side = 'n' | 'e' | 's' | 'w';
 
@@ -29,7 +31,17 @@ export interface Template {
   note: string;
   layout: Layout;
   items: TemplateItem[];
+  /** For a real building: what room rectangles cannot say (exact doors, a curved wall, its look). */
+  finish?: TemplateFinish;
+  /**
+   * A plan too large to keep in the page and build on the spot (a whole campus): it is fetched
+   * when chosen. `tile` stands in for it wherever a template is drawn small.
+   */
+  big?: { tile: PlanData; load: () => Promise<PlanData> };
 }
+
+/** Last step of building a template: `rooms` are the layout's rooms by name, where they ended up. */
+export type TemplateFinish = (plan: PlanData, ctx: { rooms: Map<string, LayoutRoom>; newId: () => string }) => PlanData;
 
 /** Clear distance kept between a wall's centerline and furniture set against it. */
 const WALL_GAP = 0.1;
@@ -335,6 +347,8 @@ export const TEMPLATES: readonly Template[] = [
       { room: 'Restrooms', kind: 'bathroom_sink', wall: 's', at: 2.6 },
     ],
   },
+  HURT_HUB,
+  DAVIDSON,
 ];
 
 const r3 = (v: number) => Math.round(v * 1000) / 1000;
@@ -378,6 +392,7 @@ export function buildTemplate(
   opts: { units?: Units; newId?: () => string } = {},
 ): BuiltTemplate {
   const newId = opts.newId ?? (() => crypto.randomUUID());
+  if (template.big) return { plan: { ...template.big.tile, name: template.name }, warnings: [], rooms: [], itemRooms: [] };
   const { plan, warnings } = layoutToPlan({ ...template.layout, title: template.name }, { newId });
   const rooms = normalizeLayout(template.layout).layout.rooms;
   const byName = new Map(rooms.map((r) => [r.name, r]));
@@ -394,13 +409,14 @@ export function buildTemplate(
     itemRooms.push(room.name);
   }
 
+  const built: PlanData = {
+    ...plan,
+    name: template.name,
+    furniture,
+    settings: { ...plan.settings, units: opts.units ?? plan.settings.units },
+  };
   return {
-    plan: {
-      ...plan,
-      name: template.name,
-      furniture,
-      settings: { ...plan.settings, units: opts.units ?? plan.settings.units },
-    },
+    plan: template.finish ? template.finish(built, { rooms: byName, newId }) : built,
     warnings,
     rooms,
     itemRooms,
