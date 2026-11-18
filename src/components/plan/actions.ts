@@ -407,11 +407,22 @@ export function pasteClipboard(at: Point | null): boolean {
   return true;
 }
 
-/** Copy the selection and remove it. */
+/**
+ * Copy the selection and remove exactly what was copied: the walls with their
+ * doors and windows, and the furniture. A door or window selected without its
+ * wall cannot be copied, so it stays (and stays selected).
+ */
 export function cutSelection(): boolean {
   if (!canEdit() || !copySelection(true)) return false;
   const { clip } = clipboard!;
-  deleteSelection();
+  const plan = usePlanStore.getState();
+  const wallIds = clip.walls.map((w) => w.id);
+  const itemIds = clip.furniture.map((f) => f.id);
+  transact(() => {
+    if (wallIds.length) plan.deleteWalls(wallIds);
+    if (itemIds.length) plan.deleteFurniture(itemIds);
+  });
+  selectOnPlan(liveSelection(usePlanStore.getState(), currentSelection()));
   toast(`Cut ${describe(clip.walls.length, clip.furniture.length)}.`, { ms: 1800 });
   return true;
 }
